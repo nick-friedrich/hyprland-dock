@@ -1,13 +1,13 @@
 # SmartDock development sessions
 
-Local isolated docks for agent testing. **Qualified substrate on this host: KVM guest with virtio-gpu**, not host-nested Aquamarine.
+Local isolated docks for agent testing. **Guest display/capture feasibility passed on this host with KVM and virtio-vga.** Source iteration, dock hosting, input, and concurrent sessions remain to be qualified.
 
 ## Status
 
 | Path | Result |
 | --- | --- |
 | Host-nested Hyprland (Aquamarine Wayland backend) | **Not qualified** — `grim` times out while the outer window is on an inactive host workspace (2026-09-15 Task 1 evidence). |
-| KVM guest (virtio-vga + guest Hyprland DRM) | **Feasibility PASS** — guest `grim` returns changing PNGs while the host QEMU window sits on inactive workspace `4` without stealing host focus. |
+| KVM guest (virtio-vga + guest Hyprland DRM) | **Display/capture feasibility PASS** — guest `grim` returns changing PNGs while the host QEMU window sits on inactive workspace `4` without stealing host focus. |
 
 Do not launch a second dock on the production display. Do not use `omarchy-shell` newest-instance targeting.
 
@@ -51,17 +51,13 @@ qemu-system-x86_64 \
   -device virtio-mouse-pci
 ```
 
-### Host window placement (Omarchy Hyprland Lua)
+### Host window placement
 
-Silent move without following focus:
+The feasibility experiment verified that its QEMU window ended on workspace `4` without following focus. Its temporary script selected the first window with class `qemu`; that shortcut must **not** be copied into the launcher because another QEMU window could already belong to the user.
 
-```lua
--- via: hyprctl repl '…'
-local w = hl.get_windows({ class = "qemu" })[1]
-hl.dispatch(hl.dsp.window.move({ workspace = "4", follow = false, window = w }))
-```
+The launcher must establish a current-version silent/no-initial-focus launch rule first, then identify the new QEMU window by the owned VM PID and its exact address in `hyprctl clients -j`. Require exactly one match. If a delegated window ignores the rule, move only that address with `movetoworkspacesilent` and verify the target workspace afterward. A class-only match or an active-window dispatcher is an ownership failure.
 
-Authorized test workspace for this run was `4`. Do not switch the user's active workspace.
+Authorized test workspace for this run was `4`. General sessions use the coding agent's workspace unless the user explicitly selects another. Never switch the user's active workspace.
 
 ### Guest compositor
 
@@ -85,7 +81,7 @@ With host active workspace ≠ `4` and QEMU on workspace `4`:
 
 ### Source bytes
 
-Candidate `AGENTS.md` SHA-256 matched between host and a copy into the guest (`SOURCE_HASH_MATCH`). **virtiofs read-only mount is not yet in the verified recipe**; the launcher must add it (virtiofsd + `vhost-user-fs-pci`) before claiming live source mounts.
+Candidate `AGENTS.md` SHA-256 matched between host and a copy into the guest (`SOURCE_HASH_MATCH`). This qualifies copied-byte fidelity for one file only. Repeatable sync of a dirty source tree, content-hash readback, and protection against guest-to-host writes are still implementation gates. Version one uses explicit sync at start and after edits; a read-only virtiofs live mount can be added after it is separately proven useful and safe.
 
 ### Not yet qualified (launcher / later tasks)
 
@@ -93,11 +89,11 @@ Candidate `AGENTS.md` SHA-256 matched between host and a copy into the guest (`S
 - Nested guest input (`wtype`) while host pointer untouched
 - Concurrent two-VM sessions
 - Disposable guest image packaging in-repo
-- virtiofs / 9p live source binds
+- Repeatable source sync and virtiofs / 9p live source binds
 
 ## Agent workflow (after launcher exists)
 
-Commands will follow the plan contract (`dev-session start|status|exec|dock|capture|stop`) on top of this KVM substrate. Until that lands, use the evidence scripts under `_kvm-feasibility/run/` only as experimental notes — not a supported product CLI.
+Commands will follow the plan contract (`dev-session start|status|sync|exec|dock|capture|stop`) on top of this KVM substrate. Until that lands, use the evidence scripts under `_kvm-feasibility/run/` only as experimental notes — not a supported product CLI.
 
 ## Related docs
 
