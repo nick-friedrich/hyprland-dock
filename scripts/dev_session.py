@@ -70,10 +70,47 @@ RECORD_FIELDS = (
     "guest_signature",
     "guest_output",
     "host_pid",
+    "guest_dock_pid",
     "config_path",
+    "guest_config_path",
+    "target",
     "evidence_path",
     "error",
 )
+
+
+def apply_guest_targeting(record: dict, *, recorded_state: str | None = None) -> dict:
+    """Status/record view: CLI targeting is the named guest, never production."""
+    view = dict(record)
+    state = recorded_state if recorded_state is not None else view.get("state")
+    view["target"] = "guest"
+    view["guest_config_path"] = GUEST_CONFIG_PATH
+    if not view.get("config_path"):
+        view["config_path"] = GUEST_CONFIG_PATH
+    if state == "starting" and view.get("guest_dock_pid") is None:
+        view["guest_dock_pid"] = None
+        view["host_pid"] = None
+        return view
+    pid = view.get("guest_dock_pid")
+    if pid is None:
+        pid = view.get("host_pid")
+    view["guest_dock_pid"] = pid
+    if pid is not None:
+        view["host_pid"] = pid
+    return view
+
+
+def _guest_dock_pid(record: dict) -> int:
+    raw = record.get("guest_dock_pid")
+    if raw is None:
+        raw = record.get("host_pid")
+    try:
+        pid = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("recorded guest dock pid is missing") from exc
+    if pid <= 0:
+        raise ValueError("recorded guest dock pid is missing")
+    return pid
 
 
 def validate_name(value: str) -> str:
@@ -975,6 +1012,9 @@ def sync_source(record: dict) -> str:
         _stop_guest_dock(latest)
         latest["state"] = "starting"
         latest["host_pid"] = None
+        latest["guest_dock_pid"] = None
+        latest["target"] = "guest"
+        latest["guest_config_path"] = GUEST_CONFIG_PATH
         latest["error"] = "dock invalidated by source sync; restart through guest host contract"
     _write_record(latest)
     return digest
@@ -1172,11 +1212,9 @@ def dock_argv(record: dict, args: list[str]) -> list[str]:
     if mode not in {"standalone", "plugin"}:
         raise ValueError("record mode must be standalone or plugin")
     try:
-        host_pid = int(record.get("host_pid"))
-    except (TypeError, ValueError) as exc:
+        host_pid = _guest_dock_pid(record)
+    except ValueError as exc:
         raise ValueError("record host_pid is required") from exc
-    if host_pid <= 0:
-        raise ValueError("record host_pid is required")
     return [
         GUEST_SMARTDOCK,
         "--runtime",
@@ -1199,10 +1237,10 @@ def qualify_guest_dock(record: dict, status_reply: dict) -> dict:
         raise ValueError("guest dock runtime is missing")
     expected_mode = record.get("mode")
     try:
-        expected_pid = str(int(record.get("host_pid")))
-    except (TypeError, ValueError) as exc:
+        expected_pid = str(_guest_dock_pid(record))
+    except ValueError as exc:
         raise ValueError("record host_pid is required") from exc
-    expected_config = record.get("config_path") or GUEST_CONFIG_PATH
+    expected_config = record.get("guest_config_path") or record.get("config_path") or GUEST_CONFIG_PATH
     if runtime.get("mode") != expected_mode:
         raise ValueError(
             f"guest dock mode {runtime.get('mode')!r} does not match {expected_mode!r}"
@@ -1453,6 +1491,8 @@ def start_guest_dock(name: str) -> dict:
     record["guest_signature"] = ready["hyprland_instance_signature"]
     record["guest_output"] = ready["output"]
     record["config_path"] = GUEST_CONFIG_PATH
+    record["guest_config_path"] = GUEST_CONFIG_PATH
+    record["target"] = "guest"
     _write_record(record)
     _stop_guest_dock(record)
     if record.get("mode") == "plugin":
@@ -1484,8 +1524,10 @@ def start_guest_dock(name: str) -> dict:
             f"qs list --all --json did not contain the launched dock pid {launched_pid}"
         )
     record["host_pid"] = launched_pid
+    record["guest_dock_pid"] = launched_pid
     if payload.get("config_path"):
         record["config_path"] = str(payload["config_path"])
+        record["guest_config_path"] = str(payload["config_path"])
     _write_record(record)
     deadline = time.monotonic() + 45
     last_error = "guest dock did not become loaded"
@@ -1528,8 +1570,8 @@ def guest_dock(name: str, argv: list[str]) -> int:
     if record.get("state") != "ready":
         raise ValueError(f"cannot use session {name!r} dock in state {record.get('state')!r}")
     try:
-        host_pid = int(record.get("host_pid"))
-    except (TypeError, ValueError) as exc:
+        host_pid = _guest_dock_pid(record)
+    except ValueError as exc:
         raise ValueError("recorded guest dock pid is missing") from exc
     instances = _guest_qs_instances(record)
     if not any(item.get("pid") == host_pid for item in instances):
@@ -1651,6 +1693,7 @@ def _terminate_owned(record: dict, *, wait_seconds: float = 5.0) -> bool:
 
 def status(name: str) -> dict:
     record = dict(read_record(name))
+    recorded_state = record.get("state")
     alive = owned_process(record)
     record["qemu_alive"] = alive
     if record.get("state") in ACTIVE_STATES and not alive:
@@ -1660,7 +1703,7 @@ def status(name: str) -> dict:
             record["error"] = "owned QEMU is dead"
         else:
             record["error"] = "stale QEMU record: process identity changed"
-    return record
+    return apply_guest_targeting(record, recorded_state=recorded_state)
 
 
 def stop(name: str) -> dict:
@@ -1722,8 +1765,11 @@ def start(
             "mode": mode,
             "source_digest": "",
             "base_image": str(paths["base_image"]),
-            "host_pid": os.getpid(),
-            "config_path": "/home/admin/.config/smartdock/dock.json",
+            "host_pid": None,
+            "guest_dock_pid": None,
+            "config_path": GUEST_CONFIG_PATH,
+            "guest_config_path": GUEST_CONFIG_PATH,
+            "target": "guest",
             "evidence_path": str(evidence),
             "error": None,
         }
@@ -1798,7 +1844,10 @@ def start(
                     "qemu_pid": record["qemu_pid"],
                     "qemu_window_address": record["qemu_window_address"],
                     "host_pid": record["host_pid"],
+                    "guest_dock_pid": record.get("guest_dock_pid"),
                     "config_path": record["config_path"],
+                    "guest_config_path": record.get("guest_config_path"),
+                    "target": "guest",
                     "evidence_path": record["evidence_path"],
                 },
                 sort_keys=True,

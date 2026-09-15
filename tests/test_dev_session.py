@@ -14,6 +14,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from dev_session import (  # noqa: E402
+    GUEST_CONFIG_PATH,
     _wait_for_guest_setup,
     default_runtime_root,
     owned_process,
@@ -25,6 +26,7 @@ from dev_session import (  # noqa: E402
     session_dir,
     source_manifest,
     guest_capture,
+    guest_dock,
     guest_exec,
     dock_argv,
     qualify_guest_dock,
@@ -836,6 +838,162 @@ class CrossTargetingTests(unittest.TestCase):
                 if proc.poll() is None:
                     proc.terminate()
                     proc.wait(timeout=5)
+
+
+GUEST_CONTROL_SH = Path(__file__).resolve().parent / "runtime/dev-session/guest-control.sh"
+
+
+class GuestControlHostGuardTests(unittest.TestCase):
+    def run_control(self, cmd, extra_env=None):
+        env = os.environ.copy()
+        env["SMARTDOCK_SESSION_NAME"] = "agent-guard"
+        env["SMARTDOCK_CANDIDATE"] = "/home/admin/smartdock-candidate"
+        env["SMARTDOCK_SESSION_MODE"] = "standalone"
+        if extra_env:
+            env.update(extra_env)
+        return subprocess.run(
+            ["bash", str(GUEST_CONTROL_SH), cmd],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=5,
+        )
+
+    def test_start_dock_refuses_on_host(self):
+        result = self.run_control("start-dock")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertRegex(result.stderr, r"refuses to run on the host")
+        self.assertNotRegex(result.stderr, r"missing.*ready")
+
+    def test_start_dock_refuses_wrong_candidate_path(self):
+        result = self.run_control(
+            "start-dock",
+            extra_env={"SMARTDOCK_CANDIDATE": "/tmp/not-a-guest-candidate"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertRegex(result.stderr, r"refuses to run on the host")
+
+    def test_start_compositor_refuses_on_host(self):
+        result = self.run_control("start-compositor")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertRegex(result.stderr, r"refuses to run on the host")
+
+
+class GuestTargetingStatusTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="dev-session-target-"))
+        self.state_home = self.tmp / "state-home"
+        self.runtime_dir = self.tmp / "runtime"
+        self.state_home.mkdir()
+        self.runtime_dir.mkdir()
+        self.env = mock.patch.dict(
+            os.environ,
+            {
+                "XDG_STATE_HOME": str(self.state_home),
+                "XDG_RUNTIME_DIR": str(self.runtime_dir),
+            },
+        )
+        self.env.start()
+        self.session = session_dir("agent-target")
+        self.session.mkdir(mode=0o700, parents=True)
+
+    def tearDown(self):
+        self.env.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_status_json_marks_guest_not_production(self):
+        (self.session / "record.json").write_text(
+            json.dumps(
+                {
+                    "name": "agent-target",
+                    "state": "ready",
+                    "host_pid": 4577,
+                    "config_path": GUEST_CONFIG_PATH,
+                    "qemu_pid": 2**30,
+                    "qemu_start_ticks": 1,
+                    "qemu_pgid": 2**30,
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = status("agent-target")
+        self.assertEqual(result["target"], "guest")
+        self.assertEqual(result["guest_dock_pid"], 4577)
+        self.assertEqual(result["guest_config_path"], GUEST_CONFIG_PATH)
+        self.assertEqual(result["host_pid"], 4577)
+        self.assertEqual(result["config_path"], GUEST_CONFIG_PATH)
+        self.assertNotEqual(result["host_pid"], os.getpid())
+        self.assertNotIn("/usr/share/omarchy", json.dumps(result))
+
+
+class ReadySyncDockTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="dev-session-ready-sync-"))
+        self.source = _init_candidate_repo(self.tmp / "source")
+        self.state_home = self.tmp / "state-home"
+        self.runtime_dir = self.tmp / "runtime"
+        self.state_home.mkdir()
+        self.runtime_dir.mkdir()
+        self.env = mock.patch.dict(
+            os.environ,
+            {
+                "XDG_STATE_HOME": str(self.state_home),
+                "XDG_RUNTIME_DIR": str(self.runtime_dir),
+            },
+        )
+        self.env.start()
+        self.session = session_dir("agent-sync")
+        self.session.mkdir(parents=True)
+        self.evidence = self.session / "evidence"
+        self.evidence.mkdir()
+        self.record = {
+            "name": "agent-sync",
+            "state": "ready",
+            "mode": "standalone",
+            "source": str(self.source),
+            "source_digest": "prior-digest",
+            "port": 22001,
+            "qemu_pid": 1,
+            "qemu_start_ticks": 1,
+            "qemu_pgid": 1,
+            "host_pid": 4577,
+            "guest_dock_pid": 4577,
+            "config_path": GUEST_CONFIG_PATH,
+            "evidence_path": str(self.evidence),
+            "error": None,
+        }
+        (self.session / "record.json").write_text(
+            json.dumps(self.record), encoding="utf-8"
+        )
+
+    def tearDown(self):
+        self.env.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_ready_sync_stops_dock_and_rejects_cli_until_restart(self):
+        scp_calls = []
+
+        def fake_scp(_record, local, remote):
+            scp_calls.append(remote)
+            Path(local).touch(exist_ok=True)
+
+        def fake_ssh(_record, command, _timeout):
+            _, digest = source_manifest(self.source)
+            return subprocess.CompletedProcess(command, 0, stdout=digest + "\n", stderr="")
+
+        with mock.patch("dev_session._scp_to_guest", side_effect=fake_scp):
+            with mock.patch("dev_session._run_ssh", side_effect=fake_ssh):
+                with mock.patch("dev_session.owned_process", return_value=True):
+                    with mock.patch("dev_session._stop_guest_dock") as stop_dock:
+                        digest = sync_source(self.record)
+                        stop_dock.assert_called_once()
+                        latest = read_record("agent-sync")
+                        self.assertEqual(latest["state"], "starting")
+                        self.assertIsNone(latest["host_pid"])
+                        self.assertIsNone(latest["guest_dock_pid"])
+                        self.assertEqual(latest["source_digest"], digest)
+                        with self.assertRaisesRegex(ValueError, r"dock in state 'starting'"):
+                            guest_dock("agent-sync", ["status", "--json"])
 
 
 if __name__ == "__main__":

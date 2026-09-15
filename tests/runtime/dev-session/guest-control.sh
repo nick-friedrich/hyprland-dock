@@ -11,6 +11,25 @@ cmd=${1:-}
 
 name=${SMARTDOCK_SESSION_NAME:?SMARTDOCK_SESSION_NAME is required}
 candidate=${SMARTDOCK_CANDIDATE:-/home/admin/smartdock-candidate}
+
+require_kvm_guest() {
+  local vendor product virt
+  if [[ "${SMARTDOCK_CANDIDATE:-}" != "/home/admin/smartdock-candidate" ]]; then
+    echo "guest-control refuses to run on the host" >&2
+    exit 1
+  fi
+  vendor=$(tr -d '\0' < /sys/class/dmi/id/sys_vendor 2>/dev/null || true)
+  product=$(tr -d '\0' < /sys/class/dmi/id/product_name 2>/dev/null || true)
+  virt=$(systemd-detect-virt --vm 2>/dev/null || true)
+  case "${vendor} ${product} ${virt}" in
+    *QEMU*|*KVM*|*qemu*|*kvm*) ;;
+    *)
+      echo "guest-control refuses to run on the host" >&2
+      exit 1
+      ;;
+    esac
+}
+
 state_root="${XDG_STATE_HOME:-$HOME/.local/state}/smartdock/dev-sessions/${name}"
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 ready="${state_root}/ready.json"
@@ -102,6 +121,7 @@ PY
 }
 
 start_compositor() {
+  require_kvm_guest
   mkdir -p "$state_root"
   chmod 700 "$state_root"
   mkdir -p "$runtime_dir"
@@ -202,6 +222,7 @@ capture() {
 }
 
 start_dock() {
+  require_kvm_guest
   mapfile -t ready_fields < <(load_ready)
   export WAYLAND_DISPLAY="${ready_fields[0]}"
   export HYPRLAND_INSTANCE_SIGNATURE="${ready_fields[1]}"

@@ -9,7 +9,7 @@ Local isolated docks for agent testing. A named KVM guest runs Hyprland, screens
 | Host-nested Hyprland (Aquamarine Wayland backend) | **Not qualified** — `grim` times out while the outer window is on an inactive host workspace (2026-09-15 Task 1 evidence). |
 | KVM guest (virtio-vga + guest Hyprland DRM) | **Display/capture feasibility PASS** — guest `grim` returns changing PNGs while the host QEMU window sits on inactive workspace `4` without stealing host focus. |
 | KVM guest standalone SmartDock | **LIVE PASS** — task4a qs pid 2816, private `~/.config/smartdock/dock.json`, frame-010.png. |
-| KVM guest Omarchy plugin SmartDock | **LIVE PASS** — Omarchy `4.0.3-1` (`version` file `4.0.0.alpha`); one guest qs pid 3415 at copied `smartdock-omarchy-test/shell/shell.qml` with Overlay.qml enabled; `--runtime plugin --instance 3415`; iconSize 42→48 guest-only; frame-011.png. First-party services were listed in `disabledPlugins`. Host `/usr/share/omarchy` and host `~/.config/smartdock/dock.json` were not edited. |
+| KVM guest Omarchy plugin SmartDock | **LIVE PASS (stripped shell)** — Omarchy `4.0.3-1` (`version` file `4.0.0.alpha`); one guest qs pid 3415 at copied `smartdock-omarchy-test/shell/shell.qml` with Overlay.qml enabled and first-party plugins disabled. This is not a full desktop Omarchy host. `--runtime plugin --instance 3415`; iconSize 42→48 guest-only; frame-011.png. Host `/usr/share/omarchy` and host `~/.config/smartdock/dock.json` were not edited. |
 | Two concurrent standalone sessions | **LIVE PASS** — task4a (port 22000, source feat-nested-dev-sessions, marker TASK7A) and task7b (port 22001, source task7b-src, marker TASK7B); distinct overlay/vars/seed/SSH/known-hosts/evidence; dirty syncs did not cross; stop A left B capturing (frame-003.png); both stopped with no leftover SmartDock QEMU. Host production qs 743034 / settings `7ccbbaf5…` unchanged. |
 | Two-session targeting with one plugin guest | **LIVE PASS** — task4a stayed `--runtime standalone --instance 4577`; task7b switched to `--runtime plugin --instance 2558` at copied `smartdock-omarchy-test/shell/shell.qml`; B `iconSize` 36 did not change A's guest settings hash. |
 
@@ -57,16 +57,19 @@ unset XDG_STATE_HOME
 
 Do not wait on `start` in the controller pane. Poll `~/.local/state/smartdock/dev-sessions/NAME/evidence/progress.json` and the flushed `guest_setup_complete` JSON line. `start` then remains alive until `stop`.
 
-Plugin mode uses `--mode plugin` on one name only. That session copies Omarchy `shell/` plus theme `colors.toml`/`shell.toml` into the guest as read-only test assets and runs one `qs -p …/shell` with `Overlay.qml` enabled. Never start a second dock in the same guest.
+Plugin mode uses `--mode plugin` on one name only. That session copies Omarchy `shell/` plus theme `colors.toml`/`shell.toml` into the guest as read-only test assets and runs one `qs -p …/shell` with `Overlay.qml` enabled and first-party plugins listed in `disabledPlugins`. That is a stripped Omarchy shell for SmartDock qualification, not a full desktop Omarchy host. Never start a second dock in the same guest.
 
 ### Commands (guest-only CLI targeting)
 
-Public `dock` injects `--runtime standalone|plugin --instance HOST_PID` from the named record. Do not pass `--instance` or `--runtime` yourself.
+Public `dock` injects `--runtime standalone|plugin --instance GUEST_DOCK_PID` from the named record. Do not pass `--instance` or `--runtime` yourself. `status --json` labels targeting with `target: guest`, `guest_dock_pid`, and `guest_config_path` (inside the VM). Those fields are never the host production dock; `host_pid`/`config_path` are aliases for the same guest process and guest file. Keep using SSH to the named guest. Never write host `~/.config/smartdock/dock.json`.
+
+`sync` of a `ready` session stops the guest dock, clears `host_pid`/`guest_dock_pid`, and sets `state=starting`. The next `dock NAME` (no argv) restarts it through the guest host contract. `dock NAME -- …` is rejected until that restart.
 
 ```bash
 unset XDG_STATE_HOME
 ./scripts/dev-session status agent-a --json
 ./scripts/dev-session sync agent-a
+./scripts/dev-session dock agent-a
 ./scripts/dev-session exec agent-a -- true
 ./scripts/dev-session dock agent-a -- status --json
 ./scripts/dev-session dock agent-a -- config schema --json
