@@ -25,6 +25,10 @@ from pathlib import Path
 GUEST_CANDIDATE = "/home/admin/smartdock-candidate"
 GUEST_CANDIDATE_NEW = "/home/admin/smartdock-candidate.new"
 GUEST_STATE_ROOT = "/home/admin/.local/state/smartdock/dev-sessions"
+GUEST_CONFIG_PATH = "/home/admin/.config/smartdock/dock.json"
+GUEST_OMARCHY_TEST = "/home/admin/smartdock-omarchy-test"
+GUEST_CONTROL = f"{GUEST_CANDIDATE}/tests/runtime/dev-session/guest-control.sh"
+GUEST_SMARTDOCK = f"{GUEST_CANDIDATE}/scripts/smartdock"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")
@@ -958,6 +962,11 @@ def sync_source(record: dict) -> str:
         raise ValueError("guest source digest did not match host manifest")
     latest["source_digest"] = digest
     latest["error"] = None
+    if latest.get("state") == "ready":
+        _stop_guest_dock(latest)
+        latest["state"] = "starting"
+        latest["host_pid"] = None
+        latest["error"] = "dock invalidated by source sync; restart through guest host contract"
     _write_record(latest)
     return digest
 
@@ -1109,6 +1118,270 @@ def guest_capture(name: str) -> Path:
     return local
 
 
+def dock_argv(record: dict, args: list[str]) -> list[str]:
+    """Build candidate CLI argv with exact recorded runtime/instance selectors."""
+    parts = [str(part) for part in args]
+    for part in parts:
+        if part in {"--instance", "--runtime"} or part.startswith("--instance=") or part.startswith(
+            "--runtime="
+        ):
+            raise ValueError("dock argv cannot override --runtime or --instance")
+    mode = record.get("mode")
+    if mode not in {"standalone", "plugin"}:
+        raise ValueError("record mode must be standalone or plugin")
+    try:
+        host_pid = int(record.get("host_pid"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("record host_pid is required") from exc
+    if host_pid <= 0:
+        raise ValueError("record host_pid is required")
+    return [
+        GUEST_SMARTDOCK,
+        "--runtime",
+        mode,
+        "--instance",
+        str(host_pid),
+        *parts,
+    ]
+
+
+def qualify_guest_dock(record: dict, status_reply: dict) -> dict:
+    """Require exact mode, PID, private config path and loaded state."""
+    if not isinstance(status_reply, dict) or not status_reply.get("ok"):
+        raise ValueError("guest dock status is not ok")
+    data = status_reply.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("guest dock status data is missing")
+    runtime = data.get("runtime")
+    if not isinstance(runtime, dict):
+        raise ValueError("guest dock runtime is missing")
+    expected_mode = record.get("mode")
+    try:
+        expected_pid = str(int(record.get("host_pid")))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("record host_pid is required") from exc
+    expected_config = record.get("config_path") or GUEST_CONFIG_PATH
+    if runtime.get("mode") != expected_mode:
+        raise ValueError(
+            f"guest dock mode {runtime.get('mode')!r} does not match {expected_mode!r}"
+        )
+    if str(runtime.get("instanceId")) != expected_pid:
+        raise ValueError(
+            f"guest dock pid {runtime.get('instanceId')!r} does not match {expected_pid!r}"
+        )
+    if data.get("configPath") != expected_config:
+        raise ValueError(
+            f"guest dock config path {data.get('configPath')!r} does not match {expected_config!r}"
+        )
+    if data.get("loadState") != "loaded":
+        raise ValueError(f"guest dock loadState {data.get('loadState')!r} is not loaded")
+    return data
+
+
+def _last_json_value(text: str):
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("expected JSON output")
+    try:
+        return json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return json.loads(text)
+
+
+def _run_guest_argv(
+    record: dict, argv: list[str], timeout: float
+) -> subprocess.CompletedProcess:
+    return _run_ssh(record, _guest_exec_command(record, argv), timeout)
+
+
+def _parse_qs_instances(text: str) -> list[dict]:
+    stripped = (text or "").strip()
+    if stripped in {"", "No running instances."}:
+        return []
+    values = json.loads(stripped)
+    if not isinstance(values, list):
+        raise RuntimeError("qs list --all --json did not return an array")
+    return values
+
+
+def _guest_qs_instances(record: dict) -> list[dict]:
+    result = _run_guest_argv(record, ["qs", "list", "--all", "--json"], 15)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "guest qs list --all --json failed: "
+            f"{(result.stderr or result.stdout or '').strip()}"
+        )
+    try:
+        return _parse_qs_instances(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"malformed guest qs list JSON: {exc}") from exc
+
+
+def _host_omarchy_shell() -> Path:
+    return Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy")) / "shell"
+
+
+def stage_omarchy_qml_assets(record: dict) -> None:
+    """Copy current Omarchy Commons/Ui into the guest as read-only test assets."""
+    shell = _host_omarchy_shell()
+    commons = shell / "Commons"
+    ui = shell / "Ui"
+    if not commons.is_dir() or not ui.is_dir():
+        raise RuntimeError(
+            f"host Omarchy Commons/Ui missing at {shell}; "
+            "cannot stage guest standalone test assets"
+        )
+    evidence = Path(record["evidence_path"])
+    evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tar_path = evidence / "omarchy-qml-assets.tar"
+    tmp = tar_path.with_name(tar_path.name + ".tmp")
+    with tarfile.open(tmp, "w") as tar:
+        tar.add(commons, arcname="shell/Commons")
+        tar.add(ui, arcname="shell/Ui")
+    os.replace(tmp, tar_path)
+    remote = f"/tmp/smartdock-omarchy-qml-{record['name']}.tar"
+    _scp_to_guest(record, tar_path, remote)
+    extract = r"""
+import os, tarfile, sys
+from pathlib import Path
+dest = Path(sys.argv[1])
+archive = Path(sys.argv[2])
+dest.mkdir(parents=True, exist_ok=True)
+for path in [dest, *dest.rglob("*")]:
+    try:
+        mode = path.stat().st_mode
+        path.chmod(mode | 0o200)
+    except OSError:
+        pass
+with tarfile.open(archive, "r") as tar:
+    tar.extractall(dest, filter="data")
+""".strip()
+    command = (
+        f"python3 -c {shlex.quote(extract)} {shlex.quote(GUEST_OMARCHY_TEST)} "
+        f"{shlex.quote(remote)} && chmod -R a-w {shlex.quote(GUEST_OMARCHY_TEST)} "
+        f"&& test -d {shlex.quote(GUEST_OMARCHY_TEST + '/shell/Commons')} "
+        f"&& test -d {shlex.quote(GUEST_OMARCHY_TEST + '/shell/Ui')}"
+    )
+    result = _run_ssh(record, command, 30)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "failed to stage guest Omarchy Commons/Ui test assets: "
+            f"{(result.stderr or result.stdout or '').strip()}"
+        )
+
+
+def _stop_guest_dock(record: dict) -> None:
+    result = _run_guest_argv(record, [GUEST_CONTROL, "stop-dock"], 20)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "guest stop-dock failed: "
+            f"{(result.stderr or result.stdout or '').strip()}"
+        )
+
+
+def _guest_smartdock_status(record: dict) -> dict:
+    argv = dock_argv(record, ["status", "--json"])
+    result = _run_guest_argv(record, argv, 20)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "guest smartdock status failed: "
+            f"{(result.stderr or result.stdout or '').strip()}"
+        )
+    try:
+        return _last_json_value(result.stdout)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(f"malformed guest smartdock status JSON: {exc}") from exc
+
+
+def start_guest_dock(name: str) -> dict:
+    """Launch candidate scripts/run in the guest and qualify the exact host."""
+    record = _require_runnable_session(name)
+    ready = _read_guest_ready(record)
+    record["guest_display"] = ready["wayland_display"]
+    record["guest_signature"] = ready["hyprland_instance_signature"]
+    record["guest_output"] = ready["output"]
+    record["config_path"] = GUEST_CONFIG_PATH
+    _write_record(record)
+    stage_omarchy_qml_assets(record)
+    started = _run_guest_argv(record, [GUEST_CONTROL, "start-dock"], 90)
+    if started.returncode != 0:
+        raise RuntimeError(
+            "guest start-dock failed: "
+            f"{(started.stderr or started.stdout or '').strip()}"
+        )
+    try:
+        payload = _last_json_value(started.stdout)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(f"malformed guest start-dock JSON: {exc}") from exc
+    try:
+        launched_pid = int(payload["pid"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"guest start-dock did not report a pid: {payload!r}") from exc
+    if launched_pid <= 0:
+        raise RuntimeError(f"guest start-dock reported invalid pid {launched_pid}")
+    instances = _guest_qs_instances(record)
+    matches = [item for item in instances if item.get("pid") == launched_pid]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"qs list --all --json did not contain the launched dock pid {launched_pid}"
+        )
+    record["host_pid"] = launched_pid
+    if payload.get("config_path"):
+        record["config_path"] = str(payload["config_path"])
+    _write_record(record)
+    deadline = time.monotonic() + 45
+    last_error = "guest dock did not become loaded"
+    qualified = None
+    while time.monotonic() < deadline:
+        try:
+            reply = _guest_smartdock_status(record)
+            qualified = qualify_guest_dock(record, reply)
+            break
+        except (RuntimeError, ValueError) as exc:
+            last_error = str(exc)
+            time.sleep(1)
+    if qualified is None:
+        raise RuntimeError(last_error)
+    record["state"] = "ready"
+    record["error"] = None
+    _write_record(record)
+    evidence = Path(record["evidence_path"])
+    (evidence / "guest-dock-status.json").write_text(
+        json.dumps(
+            {
+                "pid": launched_pid,
+                "qs_instance": matches[0],
+                "status": qualified,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return record
+
+
+def guest_dock(name: str, argv: list[str]) -> int:
+    """Run candidate smartdock ARGV in the guest with exact recorded selectors."""
+    record = _require_runnable_session(name)
+    if record.get("state") != "ready":
+        raise ValueError(f"cannot use session {name!r} dock in state {record.get('state')!r}")
+    try:
+        host_pid = int(record.get("host_pid"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("recorded guest dock pid is missing") from exc
+    instances = _guest_qs_instances(record)
+    if not any(item.get("pid") == host_pid for item in instances):
+        record["state"] = "starting"
+        record["error"] = (
+            f"recorded guest dock pid {host_pid} is gone; not guessing a replacement"
+        )
+        _write_record(record)
+        raise RuntimeError(record["error"])
+    return guest_exec(name, dock_argv(record, argv))
+
+
 def _stderr_snippet(stderr: str | None, limit: int = 400) -> str:
     text = " ".join((stderr or "").split())
     if len(text) > limit:
@@ -1177,6 +1450,7 @@ command -v grim >/dev/null || packages+=(grim)
 command -v wtype >/dev/null || packages+=(wtype)
 command -v python3 >/dev/null || packages+=(python)
 command -v seatd >/dev/null || packages+=(seatd)
+pacman -Q qt6-5compat >/dev/null 2>&1 || packages+=(qt6-5compat)
 if ((${#packages[@]})); then
   sudo pacman -Sy --noconfirm "${packages[@]}"
 fi
@@ -1342,11 +1616,16 @@ def start(
         _wait_for_guest_setup(record, evidence)
         sync_source(record)
         record = read_record(name)
+        compositor = _run_guest_argv(record, [GUEST_CONTROL, "start-compositor"], 90)
+        if compositor.returncode != 0:
+            raise RuntimeError(
+                "guest compositor failed: "
+                f"{(compositor.stderr or compositor.stdout or '').strip()}"
+            )
+        record = start_guest_dock(name)
         after_setup = _capture_host_state(evidence, "after-setup")
         if after_setup["production_settings_sha256"] != before["production_settings_sha256"]:
             raise RuntimeError("host production settings hash changed during guest setup")
-        # Development-only: remain "starting" until Task 5 dock readiness.
-        # Emit one flushed JSON line so a parallel status/stop invocation can proceed.
         record["error"] = None
         _write_record(record)
         print(
@@ -1358,6 +1637,8 @@ def start(
                     "port": record["port"],
                     "qemu_pid": record["qemu_pid"],
                     "qemu_window_address": record["qemu_window_address"],
+                    "host_pid": record["host_pid"],
+                    "config_path": record["config_path"],
                     "evidence_path": record["evidence_path"],
                 },
                 sort_keys=True,
@@ -1424,6 +1705,10 @@ def main(argv: list[str] | None = None) -> int:
     capture_parser = sub.add_parser("capture", help="copy one guest grim PNG into NAME evidence")
     capture_parser.add_argument("name")
 
+    dock_parser = sub.add_parser("dock", help="run candidate smartdock in the named guest")
+    dock_parser.add_argument("name")
+    dock_parser.add_argument("argv", nargs=argparse.REMAINDER)
+
     args = parser.parse_args(argv)
     if args.command == "prepare":
         paths = prepare_private_inputs(
@@ -1467,6 +1752,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "capture":
         print(guest_capture(args.name))
         return 0
+    if args.command == "dock":
+        argv = list(args.argv)
+        if argv[:1] == ["--"]:
+            argv = argv[1:]
+        if not argv:
+            start_guest_dock(args.name)
+            result = status(args.name)
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        return guest_dock(args.name, argv)
     parser.error(f"unsupported command: {args.command}")
     return 2
 

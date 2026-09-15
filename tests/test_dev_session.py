@@ -26,6 +26,8 @@ from dev_session import (  # noqa: E402
     source_manifest,
     guest_capture,
     guest_exec,
+    dock_argv,
+    qualify_guest_dock,
     status,
     stop,
     sync_source,
@@ -588,6 +590,69 @@ class GuestExecCaptureTests(unittest.TestCase):
                 guest_exec("agent-exec", ["true"])
             with self.assertRaisesRegex(ValueError, state):
                 guest_capture("agent-exec")
+
+
+class DockArgvTests(unittest.TestCase):
+    def setUp(self):
+        self.source_config = Path(__file__).resolve().parents[1] / "config/dock.json"
+        self.source_bytes = self.source_config.read_bytes()
+        self.record = {
+            "name": "agent-dock",
+            "mode": "standalone",
+            "host_pid": 4242,
+            "config_path": "/home/admin/.config/smartdock/dock.json",
+            "state": "starting",
+        }
+
+    def tearDown(self):
+        self.assertEqual(self.source_config.read_bytes(), self.source_bytes)
+
+    def test_rejects_instance_and_runtime_overrides(self):
+        for args in (
+            ["--instance", "999", "status", "--json"],
+            ["--instance=999", "status", "--json"],
+            ["--runtime", "auto", "status", "--json"],
+            ["--runtime=plugin", "status", "--json"],
+            ["status", "--json", "--runtime", "plugin"],
+            ["config", "get", "--instance=999"],
+        ):
+            with self.subTest(args=args):
+                with self.assertRaises(ValueError):
+                    dock_argv(self.record, args)
+
+    def test_injects_recorded_mode_and_pid(self):
+        argv = dock_argv(self.record, ["status", "--json"])
+        self.assertEqual(argv[0], "/home/admin/smartdock-candidate/scripts/smartdock")
+        self.assertEqual(argv[argv.index("--runtime") + 1], "standalone")
+        self.assertEqual(argv[argv.index("--instance") + 1], "4242")
+        self.assertIn("status", argv)
+        self.assertIn("--json", argv)
+        self.assertNotIn("999", argv)
+        self.assertNotIn("auto", argv)
+        self.assertNotIn("plugin", argv)
+
+    def test_readiness_rejects_wrong_pid_or_config_path(self):
+        good = {
+            "ok": True,
+            "data": {
+                "runtime": {"mode": "standalone", "instanceId": "4242"},
+                "configPath": "/home/admin/.config/smartdock/dock.json",
+                "loadState": "loaded",
+            },
+        }
+        self.assertEqual(qualify_guest_dock(self.record, good)["configPath"], good["data"]["configPath"])
+        wrong_pid = json.loads(json.dumps(good))
+        wrong_pid["data"]["runtime"]["instanceId"] = "999"
+        with self.assertRaises(ValueError):
+            qualify_guest_dock(self.record, wrong_pid)
+        wrong_config = json.loads(json.dumps(good))
+        wrong_config["data"]["configPath"] = "/tmp/wrong.json"
+        with self.assertRaises(ValueError):
+            qualify_guest_dock(self.record, wrong_config)
+        wrong_mode = json.loads(json.dumps(good))
+        wrong_mode["data"]["runtime"]["mode"] = "plugin"
+        with self.assertRaises(ValueError):
+            qualify_guest_dock(self.record, wrong_mode)
 
 
 if __name__ == "__main__":

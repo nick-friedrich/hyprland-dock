@@ -201,6 +201,96 @@ capture() {
   timeout 10s grim -o "$output" "$png"
 }
 
+start_dock() {
+  mapfile -t ready_fields < <(load_ready)
+  export WAYLAND_DISPLAY="${ready_fields[0]}"
+  export HYPRLAND_INSTANCE_SIGNATURE="${ready_fields[1]}"
+  export XDG_RUNTIME_DIR="${ready_fields[3]:-$runtime_dir}"
+  omarchy_path="${OMARCHY_PATH:-$HOME/smartdock-omarchy-test}"
+  if [[ ! -d "$omarchy_path/shell/Commons" || ! -d "$omarchy_path/shell/Ui" ]]; then
+    echo "missing Omarchy qs.Commons/Ui test assets at $omarchy_path/shell" >&2
+    exit 1
+  fi
+  mkdir -p "$HOME/.config/smartdock"
+  dest="$HOME/.config/smartdock/dock.json"
+  src="$candidate/config/dock.json"
+  if [[ ! -f "$dest" ]]; then
+    cp "$src" "$dest"
+    chmod 600 "$dest"
+  fi
+  export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+  export SMARTDOCK_CONFIG="$dest"
+  export OMARCHY_PATH="$omarchy_path"
+  import_root="${XDG_CACHE_HOME:-$HOME/.cache}/smartdock/qml-imports"
+  mkdir -p "$import_root"
+  rm -f "$import_root/qs"
+  ln -s "$omarchy_path/shell" "$import_root/qs"
+  export QML2_IMPORT_PATH="$import_root${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}"
+  dock_log="$state_root/dock.log"
+  dock_pidfile="$state_root/dock.pid"
+  mkdir -p "$state_root"
+
+  if [[ -f "$dock_pidfile" ]]; then
+    old_pid=$(cat "$dock_pidfile")
+    if kill -0 "$old_pid" 2>/dev/null; then
+      cmdline=$(tr '\0' ' ' <"/proc/$old_pid/cmdline" 2>/dev/null || true)
+      if [[ "$cmdline" == *"$candidate"* ]]; then
+        python3 -c "import json; print(json.dumps({'pid': int('$old_pid'), 'config_path': '$dest', 'reused': True}))"
+        return
+      fi
+    fi
+    rm -f "$dock_pidfile"
+  fi
+
+  nohup "$candidate/scripts/run" >"$dock_log" 2>&1 &
+  echo $! >"$dock_pidfile"
+  pid=$(cat "$dock_pidfile")
+  for _ in $(seq 1 30); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "guest dock exited before qs list" >&2
+      tail -n 80 "$dock_log" >&2 || true
+      exit 1
+    fi
+    list_json=$(qs list --all --json 2>/dev/null || true)
+    if QS_LIST_JSON="$list_json" python3 -c '
+import json, os, sys
+raw = os.environ.get("QS_LIST_JSON", "").strip()
+if raw in ("", "No running instances."):
+    raise SystemExit(1)
+data = json.loads(raw)
+pid = int(sys.argv[1])
+raise SystemExit(0 if any(isinstance(item, dict) and item.get("pid") == pid for item in data) else 1)
+' "$pid"; then
+      python3 -c "import json; print(json.dumps({'pid': int('$pid'), 'config_path': '$dest', 'reused': False}))"
+      return
+    fi
+    sleep 1
+  done
+  echo "guest dock pid $pid never appeared in qs list --all --json" >&2
+  tail -n 80 "$dock_log" >&2 || true
+  exit 1
+}
+
+stop_dock() {
+  dock_pidfile="$state_root/dock.pid"
+  [[ -f "$dock_pidfile" ]] || return 0
+  pid=$(cat "$dock_pidfile")
+  if kill -0 "$pid" 2>/dev/null; then
+    cmdline=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+    if [[ "$cmdline" == *"$candidate"* ]]; then
+      kill -TERM "$pid" 2>/dev/null || true
+      for _ in $(seq 1 20); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null || true
+      fi
+    fi
+  fi
+  rm -f "$dock_pidfile"
+}
+
 case "$cmd" in
   start-compositor)
     start_compositor
@@ -211,9 +301,11 @@ case "$cmd" in
   capture)
     capture "$@"
     ;;
-  start-dock|stop-dock)
-    echo "$cmd is implemented in Task 5" >&2
-    exit 2
+  start-dock)
+    start_dock
+    ;;
+  stop-dock)
+    stop_dock
     ;;
   *)
     usage
