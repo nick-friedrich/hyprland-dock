@@ -160,7 +160,7 @@ class ContractTests(unittest.TestCase):
 | Task | State | Evidence / commit |
 | --- | --- | --- |
 | 1. Private VM inputs | PASS | unit tests + prepare gate-a/gate-b distinct paths; no QEMU started |
-| 2. Lifecycle/placement | Not started | |
+| 2. Lifecycle/placement | PASS | unit tests + live task2d (QEMU 1419058 / 0x5559cb52a2f0, SSH+packages, idempotent stop); ~/.local/state/smartdock/dev-sessions/task2d/evidence/ |
 | 3. One-way source sync | Not started | |
 | 4. Guest compositor/input/capture | Not started | |
 | 5. Standalone dock | Not started | |
