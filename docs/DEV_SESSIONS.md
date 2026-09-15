@@ -1,6 +1,6 @@
 # SmartDock development sessions
 
-Local isolated docks for agent testing. **Guest display/capture feasibility passed on this host with KVM and virtio-vga.** Source iteration, dock hosting, input, and concurrent sessions remain to be qualified.
+Local isolated docks for agent testing. A named KVM guest runs Hyprland, screenshots, and one SmartDock host (standalone or Omarchy plugin) without opening a PR for each edit and without touching the production dock.
 
 ## Status
 
@@ -10,8 +10,95 @@ Local isolated docks for agent testing. **Guest display/capture feasibility pass
 | KVM guest (virtio-vga + guest Hyprland DRM) | **Display/capture feasibility PASS** — guest `grim` returns changing PNGs while the host QEMU window sits on inactive workspace `4` without stealing host focus. |
 | KVM guest standalone SmartDock | **LIVE PASS** — task4a qs pid 2816, private `~/.config/smartdock/dock.json`, frame-010.png. |
 | KVM guest Omarchy plugin SmartDock | **LIVE PASS** — Omarchy `4.0.3-1` (`version` file `4.0.0.alpha`); one guest qs pid 3415 at copied `smartdock-omarchy-test/shell/shell.qml` with Overlay.qml enabled; `--runtime plugin --instance 3415`; iconSize 42→48 guest-only; frame-011.png. First-party services were listed in `disabledPlugins`. Host `/usr/share/omarchy` and host `~/.config/smartdock/dock.json` were not edited. |
+| Two concurrent standalone sessions | **LIVE PASS** — task4a (port 22000, source feat-nested-dev-sessions, marker TASK7A) and task7b (port 22001, source task7b-src, marker TASK7B); distinct overlay/vars/seed/SSH/known-hosts/evidence; dirty syncs did not cross; stop A left B capturing (frame-003.png); both stopped with no leftover SmartDock QEMU. Host production qs 743034 / settings `7ccbbaf5…` unchanged. |
+| Two-session targeting with one plugin guest | **LIVE PASS** — task4a stayed `--runtime standalone --instance 4577`; task7b switched to `--runtime plugin --instance 2558` at copied `smartdock-omarchy-test/shell/shell.qml`; B `iconSize` 36 did not change A's guest settings hash. |
 
-Do not launch a second dock on the production display. Do not use `omarchy-shell` newest-instance targeting.
+Do not launch a second dock on the production display. Do not use `omarchy-shell` newest-instance targeting. Do not edit `/usr/share/omarchy` or host `~/.config/smartdock/dock.json`.
+
+## Quickstart
+
+`start` stays in the foreground and supervises QEMU. Use a second terminal for `status` / `sync` / `exec` / `dock` / `capture` / `stop`. Fresh names are required for new runs; evidence is kept after `stop`.
+
+Keep `XDG_STATE_HOME` unset so state is `~/.local/state/smartdock/dev-sessions/NAME`.
+
+### VM image prerequisite
+
+Use the verified Arch cloud image (do not invent another):
+
+```text
+~/.local/state/smartdock/dev-sessions/_kvm-feasibility/images/Arch-Linux-x86_64-cloudimg.qcow2
+```
+
+Host packages for the supervisor: `qemu-desktop`, `edk2-ovmf`, `cloud-utils`, plus `ssh` / `scp` / `hyprctl`. Guest packages are installed inside the VM (`Hyprland`, `qs`, `grim`, `wtype`, `python3`, `seatd`, `qt6-5compat`).
+
+### Two terminals (start stays open)
+
+Terminal 1 — source A, workspace 4 so the QEMU window stays off the active desktop:
+
+```bash
+unset XDG_STATE_HOME
+./scripts/dev-session start agent-a \
+  --source /absolute/path/to/worktree-a \
+  --base-image /home/admin/.local/state/smartdock/dev-sessions/_kvm-feasibility/images/Arch-Linux-x86_64-cloudimg.qcow2 \
+  --mode standalone \
+  --workspace 4
+```
+
+Terminal 2 — source B, same workspace, different name:
+
+```bash
+unset XDG_STATE_HOME
+./scripts/dev-session start agent-b \
+  --source /absolute/path/to/worktree-b \
+  --base-image /home/admin/.local/state/smartdock/dev-sessions/_kvm-feasibility/images/Arch-Linux-x86_64-cloudimg.qcow2 \
+  --mode standalone \
+  --workspace 4
+```
+
+Do not wait on `start` in the controller pane. Poll `~/.local/state/smartdock/dev-sessions/NAME/evidence/progress.json` and the flushed `guest_setup_complete` JSON line. `start` then remains alive until `stop`.
+
+Plugin mode uses `--mode plugin` on one name only. That session copies Omarchy `shell/` plus theme `colors.toml`/`shell.toml` into the guest as read-only test assets and runs one `qs -p …/shell` with `Overlay.qml` enabled. Never start a second dock in the same guest.
+
+### Commands (guest-only CLI targeting)
+
+Public `dock` injects `--runtime standalone|plugin --instance HOST_PID` from the named record. Do not pass `--instance` or `--runtime` yourself.
+
+```bash
+unset XDG_STATE_HOME
+./scripts/dev-session status agent-a --json
+./scripts/dev-session sync agent-a
+./scripts/dev-session exec agent-a -- true
+./scripts/dev-session dock agent-a -- status --json
+./scripts/dev-session dock agent-a -- config schema --json
+./scripts/dev-session dock agent-a -- config get --json
+./scripts/dev-session capture agent-a
+./scripts/dev-session stop agent-a
+```
+
+Replace `agent-a` with `agent-b` for the other session. `stop` is idempotent and signals only the owned QEMU PID/start-ticks.
+
+### Evidence and isolation
+
+Per-name state:
+
+```text
+~/.local/state/smartdock/dev-sessions/NAME/
+  overlay.qcow2
+  vars.fd
+  seed.iso
+  id_ed25519
+  known_hosts
+  record.json
+  evidence/
+    frame-NNN.png
+    frame-NNN.json
+```
+
+SSH is `127.0.0.1` plus that name's reserved port in `22000..22999`. Guest candidate path is always `/home/admin/smartdock-candidate`. Guest settings are always `/home/admin/.config/smartdock/dock.json` inside that VM, not the host file.
+
+### Fresh-name rule
+
+Do not reuse a name directory. After `stop`, keep evidence and pick a new name for the next run.
 
 ## Feasibility recipe (verified 2026-09-15)
 
@@ -85,15 +172,14 @@ With host active workspace ≠ `4` and QEMU on workspace `4`:
 
 Candidate `AGENTS.md` SHA-256 matched between host and a copy into the guest (`SOURCE_HASH_MATCH`). This qualifies copied-byte fidelity for one file only. Repeatable sync of a dirty source tree, content-hash readback, and protection against guest-to-host writes are still implementation gates. Version one uses explicit sync at start and after edits; a read-only virtiofs live mount can be added after it is separately proven useful and safe.
 
-### Not yet qualified (launcher / later tasks)
+### Not yet qualified
 
-- Concurrent two-VM sessions
 - Disposable guest image packaging in-repo
 - virtiofs / 9p live source binds
 
-## Agent workflow (after launcher exists)
+## Agent workflow
 
-Commands will follow the plan contract (`dev-session start|status|sync|exec|dock|capture|stop`) on top of this KVM substrate. Until that lands, use the evidence scripts under `_kvm-feasibility/run/` only as experimental notes — not a supported product CLI.
+Use `./scripts/dev-session` as documented in the Quickstart. `start` stays open; a second terminal runs `status|sync|exec|dock|capture|stop`. Evidence under `_kvm-feasibility/run/` is historical capture notes, not the product CLI.
 
 ## Related docs
 

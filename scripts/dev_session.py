@@ -709,6 +709,14 @@ def _ssh_argv(record: dict, remote_command: str) -> list[str]:
     ]
 
 
+def ssh_argv(record: dict, remote_command: str = "true") -> list[str]:
+    """Exact SSH argv for NAME: private key, known-hosts, and reserved port."""
+    name = validate_name(record.get("name", ""))
+    if record.get("port") is None:
+        raise ValueError(f"session {name!r} has no reserved port")
+    return _ssh_argv(record, remote_command)
+
+
 def _run_ssh(record: dict, command: str, timeout: float) -> subprocess.CompletedProcess:
     return subprocess.run(
         _ssh_argv(record, command),

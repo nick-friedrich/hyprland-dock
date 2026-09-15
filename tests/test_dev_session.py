@@ -30,6 +30,7 @@ from dev_session import (  # noqa: E402
     qualify_guest_dock,
     first_party_plugin_ids,
     plugin_shell_config,
+    ssh_argv,
     status,
     stop,
     sync_source,
@@ -728,6 +729,113 @@ class PluginHostTests(unittest.TestCase):
         self.assertEqual(config["bar"]["layout"], {"left": [], "center": [], "right": []})
         self.assertIsInstance(config["plugins"][0], dict)
         self.assertNotIsInstance(config["plugins"][0], str)
+
+
+class CrossTargetingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="dev-session-cross-"))
+        self.state_home = self.tmp / "state-home"
+        self.runtime_dir = self.tmp / "runtime"
+        self.state_home.mkdir()
+        self.runtime_dir.mkdir()
+        self.env = mock.patch.dict(
+            os.environ,
+            {
+                "XDG_STATE_HOME": str(self.state_home),
+                "XDG_RUNTIME_DIR": str(self.runtime_dir),
+            },
+        )
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def write_record(self, name, record):
+        session = session_dir(name)
+        session.mkdir(mode=0o700, parents=True)
+        (session / "id_ed25519").write_bytes(b"key-" + name.encode())
+        os.chmod(session / "id_ed25519", 0o600)
+        (session / "known_hosts").write_text("", encoding="utf-8")
+        evidence = session / "evidence"
+        evidence.mkdir()
+        record = dict(record)
+        record.setdefault("evidence_path", str(evidence))
+        (session / "record.json").write_text(json.dumps(record), encoding="utf-8")
+        return record, session, evidence
+
+    def test_two_records_use_distinct_ssh_and_evidence(self):
+        rec_a, session_a, evidence_a = self.write_record(
+            "agent-a",
+            {"name": "agent-a", "state": "starting", "port": 22001},
+        )
+        rec_b, session_b, evidence_b = self.write_record(
+            "agent-b",
+            {"name": "agent-b", "state": "starting", "port": 22002},
+        )
+        argv_a = ssh_argv(rec_a, "true")
+        argv_b = ssh_argv(rec_b, "true")
+        self.assertNotEqual(argv_a, argv_b)
+        self.assertNotEqual(argv_a[argv_a.index("-i") + 1], argv_b[argv_b.index("-i") + 1])
+        self.assertNotEqual(argv_a[argv_a.index("-p") + 1], argv_b[argv_b.index("-p") + 1])
+        known_a = next(part for part in argv_a if part.startswith("UserKnownHostsFile="))
+        known_b = next(part for part in argv_b if part.startswith("UserKnownHostsFile="))
+        self.assertNotEqual(known_a, known_b)
+        self.assertIn(str(session_a / "id_ed25519"), argv_a)
+        self.assertIn(str(session_b / "id_ed25519"), argv_b)
+        self.assertNotEqual(evidence_a, evidence_b)
+        self.assertEqual(Path(rec_a["evidence_path"]), evidence_a)
+        self.assertEqual(Path(rec_b["evidence_path"]), evidence_b)
+
+    def test_forged_a_pid_does_not_signal_b(self):
+        proc_a = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            start_new_session=True,
+        )
+        proc_b = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            start_new_session=True,
+        )
+        try:
+            ident_a = process_identity(proc_a.pid)
+            ident_b = process_identity(proc_b.pid)
+            self.write_record(
+                "agent-a",
+                {
+                    "name": "agent-a",
+                    "state": "starting",
+                    "port": 22001,
+                    "qemu_pid": ident_a["pid"],
+                    "qemu_start_ticks": ident_a["start_ticks"] + 1,
+                    "qemu_pgid": ident_a["pgid"],
+                },
+            )
+            rec_b, _, _ = self.write_record(
+                "agent-b",
+                {
+                    "name": "agent-b",
+                    "state": "starting",
+                    "port": 22002,
+                    "qemu_pid": ident_b["pid"],
+                    "qemu_start_ticks": ident_b["start_ticks"],
+                    "qemu_pgid": ident_b["pgid"],
+                },
+            )
+            with self.assertRaisesRegex(ValueError, "ownership mismatch"):
+                stop("agent-a")
+            self.assertIsNone(proc_a.poll())
+            self.assertIsNone(proc_b.poll())
+            self.assertEqual(read_record("agent-b")["qemu_pid"], rec_b["qemu_pid"])
+            self.assertEqual(read_record("agent-b")["state"], "starting")
+            self.assertEqual(stop("agent-b")["state"], "stopped")
+            self.assertIsNotNone(proc_b.poll())
+            self.assertIsNone(proc_a.poll())
+            self.assertEqual(read_record("agent-a")["state"], "failed")
+        finally:
+            for proc in (proc_a, proc_b):
+                if proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=5)
 
 
 if __name__ == "__main__":
