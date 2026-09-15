@@ -159,7 +159,7 @@ class ContractTests(unittest.TestCase):
 
 | Task | State | Evidence / commit |
 | --- | --- | --- |
-| 1. Private VM inputs | Not started | |
+| 1. Private VM inputs | PASS | unit tests + prepare gate-a/gate-b distinct paths; no QEMU started |
 | 2. Lifecycle/placement | Not started | |
 | 3. One-way source sync | Not started | |
 | 4. Guest compositor/input/capture | Not started | |
