@@ -161,7 +161,7 @@ class ContractTests(unittest.TestCase):
 | --- | --- | --- |
 | 1. Private VM inputs | PASS | unit tests + prepare gate-a/gate-b distinct paths; no QEMU started |
 | 2. Lifecycle/placement | PASS | unit tests + live task2d (QEMU 1419058 / 0x5559cb52a2f0, SSH+packages, idempotent stop); ~/.local/state/smartdock/dev-sessions/task2d/evidence/ |
-| 3. One-way source sync | UNIT PASS; live pending | unit tests in this commit; live sync needs parent VM on w7Y:p3 |
+| 3. One-way source sync | LIVE PASS | unit tests + live task3a two syncs (87a19c→deefb21→58b7fd), guest-only marker, idempotent stop; ~/.local/state/smartdock/dev-sessions/task3a/evidence/ |
 | 4. Guest compositor/input/capture | Not started | |
 | 5. Standalone dock | Not started | |
 | 6. Plugin mode | Not started | |
