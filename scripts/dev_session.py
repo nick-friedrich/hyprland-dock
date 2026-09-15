@@ -10,15 +10,20 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import signal
 import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+GUEST_CANDIDATE = "/home/admin/smartdock-candidate"
+GUEST_CANDIDATE_NEW = "/home/admin/smartdock-candidate.new"
 
 NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")
 SOURCE_REQUIRED = (
@@ -707,6 +712,227 @@ def _run_ssh(record: dict, command: str, timeout: float) -> subprocess.Completed
     )
 
 
+def _scp_to_guest(record: dict, local: Path, remote: str) -> None:
+    session = session_dir(record["name"])
+    argv = [
+        "scp",
+        "-i",
+        str(session / "id_ed25519"),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        f"UserKnownHostsFile={session / 'known_hosts'}",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-P",
+        str(record["port"]),
+        "--",
+        str(local),
+        f"admin@127.0.0.1:{remote}",
+    ]
+    result = subprocess.run(argv, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"scp to guest failed: {(result.stderr or result.stdout or '').strip()}")
+
+
+def _validate_relpath(rel: str) -> str:
+    if not rel or rel.startswith("/") or rel.endswith("/"):
+        raise ValueError(f"invalid source path: {rel!r}")
+    parts = Path(rel).parts
+    if any(part in (".", "..") for part in parts) or Path(rel).is_absolute():
+        raise ValueError(f"path traversal rejected: {rel!r}")
+    if rel == ".git" or rel.startswith(".git/"):
+        raise ValueError(f".git path rejected: {rel!r}")
+    return rel
+
+
+def _hash_entry(path: str, payload: bytes) -> str:
+    return hashlib.sha256(path.encode("utf-8") + b"\0" + payload).hexdigest()
+
+
+def _manifest_digest(entries: list[dict]) -> str:
+    digest = hashlib.sha256()
+    for entry in entries:
+        digest.update(entry["path"].encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(entry["kind"].encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(entry["sha256"].encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _git_ls_files(source: Path) -> list[bytes]:
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or b"").decode("utf-8", "replace").strip()
+        raise ValueError(f"git ls-files failed in {source}: {detail}")
+    paths = [item for item in result.stdout.split(b"\0") if item]
+    paths.sort()
+    return paths
+
+
+def source_manifest(source: Path) -> tuple[list[dict], str]:
+    """Inventory Git-tracked and nonignored untracked files; hash working-tree bytes."""
+    source = resolve_existing_dir(source, "source")
+    entries = []
+    for raw in _git_ls_files(source):
+        rel = _validate_relpath(os.fsdecode(raw))
+        full = source / rel
+        if full.is_symlink():
+            payload = os.fsencode(os.readlink(full))
+            entries.append(
+                {
+                    "path": rel,
+                    "kind": "symlink",
+                    "sha256": _hash_entry(rel, payload),
+                    "target": os.readlink(full),
+                }
+            )
+        elif full.is_file():
+            data = full.read_bytes()
+            entries.append(
+                {
+                    "path": rel,
+                    "kind": "file",
+                    "sha256": _hash_entry(rel, data),
+                    "size": len(data),
+                }
+            )
+        else:
+            raise ValueError(f"unsupported source path kind: {rel!r}")
+    return entries, _manifest_digest(entries)
+
+
+def _current_entry_hash(source: Path, entry: dict) -> str:
+    full = source / entry["path"]
+    if entry["kind"] == "symlink":
+        if not full.is_symlink():
+            raise ValueError(f"source path changed during archive: {entry['path']}")
+        return _hash_entry(entry["path"], os.fsencode(os.readlink(full)))
+    if full.is_symlink() or not full.is_file():
+        raise ValueError(f"source path changed during archive: {entry['path']}")
+    return _hash_entry(entry["path"], full.read_bytes())
+
+
+def _write_source_archive(source: Path, entries: list[dict], tar_path: Path) -> None:
+    tmp = tar_path.with_name(tar_path.name + ".tmp")
+    with tarfile.open(tmp, "w") as tar:
+        for entry in entries:
+            if _current_entry_hash(source, entry) != entry["sha256"]:
+                raise ValueError(f"source path changed during archive: {entry['path']}")
+            tar.add(source / entry["path"], arcname=entry["path"], recursive=False)
+    os.replace(tmp, tar_path)
+
+
+GUEST_APPLY_SCRIPT = r"""
+import hashlib, json, os, shutil, sys, tarfile
+from pathlib import Path
+def hash_entry(path, payload):
+    return hashlib.sha256(path.encode("utf-8") + b"\0" + payload).hexdigest()
+archive = Path(sys.argv[1])
+manifest = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+dest_new = Path(sys.argv[3])
+dest = Path(sys.argv[4])
+if dest_new.exists():
+    shutil.rmtree(dest_new)
+dest_new.mkdir(parents=True)
+with tarfile.open(archive, "r") as tar:
+    tar.extractall(dest_new, filter="data")
+for entry in manifest["entries"]:
+    rel = entry["path"]
+    parts = Path(rel).parts
+    if (not rel) or rel.startswith("/") or any(part in (".", "..") for part in parts):
+        raise SystemExit(f"invalid path {rel!r}")
+    full = dest_new.joinpath(*parts)
+    full.relative_to(dest_new)
+    if entry["kind"] == "symlink":
+        if not full.is_symlink():
+            raise SystemExit(f"missing symlink {rel}")
+        actual = hash_entry(rel, os.fsencode(os.readlink(full)))
+    elif entry["kind"] == "file":
+        if full.is_symlink() or not full.is_file():
+            raise SystemExit(f"missing file {rel}")
+        actual = hash_entry(rel, full.read_bytes())
+    else:
+        raise SystemExit(f"unsupported kind {entry['kind']}")
+    if actual != entry["sha256"]:
+        raise SystemExit(f"hash mismatch {rel}")
+if dest.exists():
+    shutil.rmtree(dest)
+dest_new.rename(dest)
+print(manifest["digest"], flush=True)
+""".lstrip()
+
+
+def _guest_sync_command(archive_remote: str, manifest_remote: str) -> str:
+    return " ".join(
+        [
+            "python3",
+            "-c",
+            shlex.quote(GUEST_APPLY_SCRIPT),
+            shlex.quote(archive_remote),
+            shlex.quote(manifest_remote),
+            shlex.quote(GUEST_CANDIDATE_NEW),
+            shlex.quote(GUEST_CANDIDATE),
+        ]
+    )
+
+
+def sync_source(record: dict) -> str:
+    """Copy NAME's candidate source one-way into the guest and return the digest."""
+    name = validate_name(record.get("name", ""))
+    latest = dict(read_record(name))
+    if latest.get("state") not in {"starting", "ready"}:
+        raise ValueError(f"cannot sync session {name!r} in state {latest.get('state')!r}")
+    if not owned_process(latest):
+        raise ValueError(f"cannot sync session {name!r}: owned QEMU is not running")
+    source = resolve_existing_dir(Path(latest["source"]), "source")
+    evidence = Path(latest["evidence_path"])
+    evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
+    entries, digest = source_manifest(source)
+    tar_path = evidence / "source-sync.tar"
+    manifest_path = evidence / "source-sync.json"
+    _write_source_archive(source, entries, tar_path)
+    manifest_path.write_text(
+        json.dumps({"digest": digest, "entries": entries}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    archive_remote = f"/tmp/smartdock-sync-{name}.tar"
+    manifest_remote = f"/tmp/smartdock-sync-{name}.json"
+    _scp_to_guest(latest, tar_path, archive_remote)
+    _scp_to_guest(latest, manifest_path, manifest_remote)
+    result = _run_ssh(latest, _guest_sync_command(archive_remote, manifest_remote), 120)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"guest sync failed with exit code {result.returncode}: "
+            f"{(result.stderr or result.stdout or '').strip()}"
+        )
+    readback = (result.stdout or "").strip().splitlines()
+    guest_digest = readback[-1] if readback else ""
+    if guest_digest != digest:
+        raise ValueError("guest source digest did not match host manifest")
+    latest["source_digest"] = digest
+    latest["error"] = None
+    _write_record(latest)
+    return digest
+
+
 def _stderr_snippet(stderr: str | None, limit: int = 400) -> str:
     text = " ".join((stderr or "").split())
     if len(text) > limit:
@@ -938,6 +1164,8 @@ def start(
             raise RuntimeError("host production settings hash changed during launch")
 
         _wait_for_guest_setup(record, evidence)
+        sync_source(record)
+        record = read_record(name)
         after_setup = _capture_host_state(evidence, "after-setup")
         if after_setup["production_settings_sha256"] != before["production_settings_sha256"]:
             raise RuntimeError("host production settings hash changed during guest setup")
@@ -1010,6 +1238,9 @@ def main(argv: list[str] | None = None) -> int:
     stop_parser = sub.add_parser("stop", help="stop one exactly owned VM")
     stop_parser.add_argument("name")
 
+    sync_parser = sub.add_parser("sync", help="copy candidate source one-way into the named guest")
+    sync_parser.add_argument("name")
+
     args = parser.parse_args(argv)
     if args.command == "prepare":
         paths = prepare_private_inputs(
@@ -1039,6 +1270,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "stop":
         result = stop(args.name)
         print(f"{result['name']}: {result['state']}")
+        return 0
+    if args.command == "sync":
+        print(sync_source(read_record(args.name)))
         return 0
     parser.error(f"unsupported command: {args.command}")
     return 2

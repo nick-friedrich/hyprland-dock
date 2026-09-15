@@ -1,9 +1,11 @@
+import hashlib
 import json
 import os
 import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from datetime import datetime
@@ -21,8 +23,10 @@ from dev_session import (  # noqa: E402
     read_record,
     reserve_port,
     session_dir,
+    source_manifest,
     status,
     stop,
+    sync_source,
     validate_name,
 )
 
@@ -275,6 +279,202 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(progress["last_ssh_returncode"], 0)
         self.assertEqual(progress["last_ssh_stderr"], "")
         datetime.fromisoformat(progress["timestamp"])
+
+
+def _git(cwd, *args, extra_env=None):
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def _init_candidate_repo(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init")
+    (root / "tracked.txt").write_text("tracked-bytes\n", encoding="utf-8")
+    (root / "dirty.txt").write_text("dirty-original\n", encoding="utf-8")
+    (root / "path with spaces.txt").write_text("spaces\n", encoding="utf-8")
+    (root / "ignored.txt").write_text("should-not-transfer\n", encoding="utf-8")
+    (root / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+    os.symlink("tracked.txt", root / "link-to-tracked")
+    _git(root, "add", "tracked.txt", "dirty.txt", "path with spaces.txt", ".gitignore", "link-to-tracked")
+    _git(
+        root,
+        "-c",
+        "user.email=dev-session@test",
+        "-c",
+        "user.name=dev-session",
+        "commit",
+        "-m",
+        "init",
+    )
+    (root / "dirty.txt").write_text("dirty-edited\n", encoding="utf-8")
+    (root / "untracked.txt").write_text("untracked-bytes\n", encoding="utf-8")
+    return root
+
+
+class SourceSyncTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="dev-session-sync-"))
+        self.source = _init_candidate_repo(self.tmp / "source")
+        self.state_home = self.tmp / "state-home"
+        self.runtime_dir = self.tmp / "runtime"
+        self.state_home.mkdir()
+        self.runtime_dir.mkdir()
+        self.env = mock.patch.dict(
+            os.environ,
+            {
+                "XDG_STATE_HOME": str(self.state_home),
+                "XDG_RUNTIME_DIR": str(self.runtime_dir),
+            },
+        )
+        self.env.start()
+        self.session = session_dir("agent-sync")
+        self.session.mkdir(parents=True)
+        self.evidence = self.session / "evidence"
+        self.evidence.mkdir()
+        self.guest_root = self.tmp / "guest"
+        self.guest_root.mkdir()
+        self.record = {
+            "name": "agent-sync",
+            "state": "starting",
+            "source": str(self.source),
+            "source_digest": "prior-digest",
+            "port": 22001,
+            "qemu_pid": 1,
+            "qemu_start_ticks": 1,
+            "qemu_pgid": 1,
+            "evidence_path": str(self.evidence),
+            "error": None,
+        }
+        (self.session / "record.json").write_text(
+            json.dumps(self.record), encoding="utf-8"
+        )
+
+    def tearDown(self):
+        self.env.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_manifest_tracks_dirty_untracked_spaces_and_skips_ignored(self):
+        entries, digest = source_manifest(self.source)
+        paths = {entry["path"] for entry in entries}
+        self.assertIn("tracked.txt", paths)
+        self.assertIn("dirty.txt", paths)
+        self.assertIn("untracked.txt", paths)
+        self.assertIn("path with spaces.txt", paths)
+        self.assertIn("link-to-tracked", paths)
+        self.assertNotIn("ignored.txt", paths)
+        self.assertFalse(any(path == ".git" or path.startswith(".git/") for path in paths))
+        self.assertEqual(len(digest), 64)
+
+        dirty = next(entry for entry in entries if entry["path"] == "dirty.txt")
+        self.assertEqual(dirty["kind"], "file")
+        self.assertEqual(
+            dirty["sha256"],
+            hashlib.sha256(b"dirty.txt\0" + b"dirty-edited\n").hexdigest(),
+        )
+        link = next(entry for entry in entries if entry["path"] == "link-to-tracked")
+        self.assertEqual(link["kind"], "symlink")
+        self.assertEqual(
+            link["sha256"],
+            hashlib.sha256(b"link-to-tracked\0" + b"tracked.txt").hexdigest(),
+        )
+
+        before = digest
+        (self.source / "dirty.txt").write_text("dirty-again\n", encoding="utf-8")
+        _, after = source_manifest(self.source)
+        self.assertNotEqual(before, after)
+
+    def test_sync_archive_excludes_git_and_ignored_and_is_one_way(self):
+        host_tracked = hashlib.sha256((self.source / "tracked.txt").read_bytes()).hexdigest()
+        scp_calls = []
+
+        def fake_scp(record, local, remote):
+            self.assertEqual(record["name"], "agent-sync")
+            self.assertTrue(str(remote).startswith("/tmp/") or str(remote).startswith("/home/admin/"))
+            scp_calls.append((Path(local), remote))
+            dest = self.guest_root / Path(remote).name
+            shutil.copy2(local, dest)
+
+        def fake_ssh(record, command, timeout):
+            del timeout
+            self.assertEqual(record["name"], "agent-sync")
+            self.assertIn("/home/admin/smartdock-candidate", command)
+            self.assertNotIn("virtiofs", command)
+            tar_remote = next(remote for _, remote in scp_calls if str(remote).endswith(".tar"))
+            guest_tar = self.guest_root / Path(tar_remote).name
+            dest_new = self.guest_root / "smartdock-candidate.new"
+            dest = self.guest_root / "smartdock-candidate"
+            if dest_new.exists():
+                shutil.rmtree(dest_new)
+            dest_new.mkdir()
+            with tarfile.open(guest_tar, "r") as tar:
+                names = tar.getnames()
+                self.assertNotIn("ignored.txt", names)
+                self.assertFalse(any(name == ".git" or name.startswith(".git/") for name in names))
+                self.assertIn("path with spaces.txt", names)
+                self.assertIn("untracked.txt", names)
+                tar.extractall(dest_new, filter="data")
+            if dest.exists():
+                shutil.rmtree(dest)
+            dest_new.rename(dest)
+            _, digest = source_manifest(self.source)
+            return subprocess.CompletedProcess(command, 0, stdout=digest + "\n", stderr="")
+
+        with mock.patch("dev_session._scp_to_guest", side_effect=fake_scp):
+            with mock.patch("dev_session._run_ssh", side_effect=fake_ssh):
+                with mock.patch("dev_session.owned_process", return_value=True):
+                    digest = sync_source(self.record)
+
+        self.assertTrue(scp_calls)
+        guest_only = self.guest_root / "smartdock-candidate" / "GUEST-ONLY"
+        guest_only.write_text("guest-marker\n", encoding="utf-8")
+        (self.guest_root / "smartdock-candidate" / "tracked.txt").write_text(
+            "mutated-on-guest\n", encoding="utf-8"
+        )
+        self.assertEqual(
+            hashlib.sha256((self.source / "tracked.txt").read_bytes()).hexdigest(),
+            host_tracked,
+        )
+        self.assertFalse((self.source / "GUEST-ONLY").exists())
+        self.assertEqual(read_record("agent-sync")["source_digest"], digest)
+        self.assertNotEqual(digest, "prior-digest")
+
+    def test_sync_retains_prior_digest_when_guest_readback_mismatches(self):
+        def fake_scp(record, local, remote):
+            del record, remote
+            Path(local).touch(exist_ok=True)
+
+        def fake_ssh(_record, command, _timeout):
+            return subprocess.CompletedProcess(command, 0, stdout="not-the-digest\n", stderr="")
+
+        with mock.patch("dev_session._scp_to_guest", side_effect=fake_scp):
+            with mock.patch("dev_session._run_ssh", side_effect=fake_ssh):
+                with mock.patch("dev_session.owned_process", return_value=True):
+                    with self.assertRaises(ValueError):
+                        sync_source(self.record)
+        self.assertEqual(read_record("agent-sync")["source_digest"], "prior-digest")
+
+    def test_archive_rejects_file_changed_after_inventory(self):
+        real_manifest = source_manifest
+
+        def mutating_manifest(source):
+            entries, digest = real_manifest(source)
+            (source / "tracked.txt").write_text("changed-after-inventory\n", encoding="utf-8")
+            return entries, digest
+
+        with mock.patch("dev_session.source_manifest", side_effect=mutating_manifest):
+            with mock.patch("dev_session.owned_process", return_value=True):
+                with self.assertRaises(ValueError):
+                    sync_source(self.record)
+        self.assertEqual(read_record("agent-sync")["source_digest"], "prior-digest")
 
 
 if __name__ == "__main__":
