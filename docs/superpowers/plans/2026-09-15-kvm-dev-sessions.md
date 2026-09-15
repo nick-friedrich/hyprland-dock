@@ -162,7 +162,7 @@ class ContractTests(unittest.TestCase):
 | 1. Private VM inputs | PASS | unit tests + prepare gate-a/gate-b distinct paths; no QEMU started |
 | 2. Lifecycle/placement | PASS | unit tests + live task2d (QEMU 1419058 / 0x5559cb52a2f0, SSH+packages, idempotent stop); ~/.local/state/smartdock/dev-sessions/task2d/evidence/ |
 | 3. One-way source sync | LIVE PASS | unit tests + live task3a two syncs (87a19c→deefb21→58b7fd), guest-only marker, idempotent stop; ~/.local/state/smartdock/dev-sessions/task3a/evidence/ |
-| 4. Guest compositor/input/capture | Not started | |
+| 4. Guest compositor/input/capture | LIVE PASS | unit tests + live task4a Virtual-1 grim (input 001≠002, labeled colors 006–008 distinct), QEMU 1470347 on ws 4, host ws/window unchanged; ~/.local/state/smartdock/dev-sessions/task4a/evidence/ |
 | 5. Standalone dock | Not started | |
 | 6. Plugin mode | Not started | |
 | 7. Two agents/docs | Not started | |

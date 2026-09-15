@@ -24,6 +24,8 @@ from pathlib import Path
 
 GUEST_CANDIDATE = "/home/admin/smartdock-candidate"
 GUEST_CANDIDATE_NEW = "/home/admin/smartdock-candidate.new"
+GUEST_STATE_ROOT = "/home/admin/.local/state/smartdock/dev-sessions"
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")
 SOURCE_REQUIRED = (
@@ -737,6 +739,33 @@ def _scp_to_guest(record: dict, local: Path, remote: str) -> None:
         raise RuntimeError(f"scp to guest failed: {(result.stderr or result.stdout or '').strip()}")
 
 
+def _scp_from_guest(record: dict, remote: str, local: Path) -> None:
+    session = session_dir(record["name"])
+    argv = [
+        "scp",
+        "-i",
+        str(session / "id_ed25519"),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        f"UserKnownHostsFile={session / 'known_hosts'}",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-P",
+        str(record["port"]),
+        "--",
+        f"admin@127.0.0.1:{remote}",
+        str(local),
+    ]
+    result = subprocess.run(argv, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"scp from guest failed: {(result.stderr or result.stdout or '').strip()}"
+        )
+
+
 def _validate_relpath(rel: str) -> str:
     if not rel or rel.startswith("/") or rel.endswith("/"):
         raise ValueError(f"invalid source path: {rel!r}")
@@ -931,6 +960,153 @@ def sync_source(record: dict) -> str:
     latest["error"] = None
     _write_record(latest)
     return digest
+
+
+def _guest_ready_path(name: str) -> str:
+    return f"{GUEST_STATE_ROOT}/{validate_name(name)}/ready.json"
+
+
+def _require_runnable_session(name: str) -> dict:
+    name = validate_name(name)
+    record = read_record(name)
+    state = record.get("state")
+    if state in {"stopped", "failed"}:
+        raise ValueError(f"cannot use session {name!r} in state {state!r}")
+    if not owned_process(record):
+        raise ValueError(f"cannot use session {name!r}: owned QEMU is not running")
+    return record
+
+
+def _guest_env_eval_script() -> str:
+    return """
+import json, os, shlex
+ready = os.environ.get("READY", "")
+if not ready or not os.path.isfile(ready):
+    raise SystemExit(0)
+data = json.load(open(ready, encoding="utf-8"))
+mapping = (
+    ("wayland_display", "WAYLAND_DISPLAY"),
+    ("hyprland_instance_signature", "HYPRLAND_INSTANCE_SIGNATURE"),
+    ("xdg_runtime_dir", "XDG_RUNTIME_DIR"),
+)
+for src, env in mapping:
+    value = data.get(src)
+    if value:
+        print(f"export {env}={shlex.quote(str(value))}")
+""".strip()
+
+
+def _guest_exec_command(record: dict, argv: list[str]) -> str:
+    if not argv:
+        raise ValueError("exec requires a command")
+    joined = shlex.join([str(part) for part in argv])
+    ready = _guest_ready_path(record["name"])
+    return (
+        "set -euo pipefail; "
+        f"export SMARTDOCK_SESSION_NAME={shlex.quote(record['name'])}; "
+        f"export SMARTDOCK_CANDIDATE={shlex.quote(GUEST_CANDIDATE)}; "
+        f"export READY={shlex.quote(ready)}; "
+        f"eval \"$(python3 -c {shlex.quote(_guest_env_eval_script())})\"; "
+        f"exec {joined}"
+    )
+
+
+def guest_exec(name: str, argv: list[str]) -> int:
+    """Run ARGV in the named guest with literal quoting and compositor env."""
+    record = _require_runnable_session(name)
+    result = _run_ssh(record, _guest_exec_command(record, argv), 120)
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+        sys.stdout.flush()
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+        sys.stderr.flush()
+    return int(result.returncode)
+
+
+def _read_guest_ready(record: dict) -> dict:
+    result = _run_ssh(record, f"cat {shlex.quote(_guest_ready_path(record['name']))}", 10)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "guest compositor readiness JSON is missing; start-compositor first"
+        )
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"malformed guest readiness JSON: {exc}") from exc
+    for key in ("wayland_display", "hyprland_instance_signature", "output"):
+        if not data.get(key):
+            raise RuntimeError(f"guest readiness missing {key}")
+    return data
+
+
+def _next_frame_path(evidence: Path) -> Path:
+    numbers = []
+    for path in evidence.glob("frame-*.png"):
+        try:
+            numbers.append(int(path.stem.split("-", 1)[1]))
+        except (IndexError, ValueError):
+            continue
+    next_number = max(numbers, default=0) + 1
+    return evidence / f"frame-{next_number:03d}.png"
+
+
+def guest_capture(name: str) -> Path:
+    """Capture one guest PNG into NAME's numbered evidence path."""
+    record = _require_runnable_session(name)
+    ready = _read_guest_ready(record)
+    record["guest_display"] = ready["wayland_display"]
+    record["guest_signature"] = ready["hyprland_instance_signature"]
+    record["guest_output"] = ready["output"]
+    _write_record(record)
+    remote_png = f"/tmp/smartdock-capture-{record['name']}.png"
+    runtime = ready.get("xdg_runtime_dir") or "/run/user/1000"
+    command = " ".join(
+        [
+            f"export XDG_RUNTIME_DIR={shlex.quote(str(runtime))};",
+            f"export WAYLAND_DISPLAY={shlex.quote(ready['wayland_display'])};",
+            f"export HYPRLAND_INSTANCE_SIGNATURE={shlex.quote(ready['hyprland_instance_signature'])};",
+            shlex.join(
+                ["timeout", "10s", "grim", "-o", ready["output"], remote_png]
+            ),
+        ]
+    )
+    result = _run_ssh(record, command, 20)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"guest grim capture failed or timed out: "
+            f"{(result.stderr or result.stdout or '').strip()}"
+        )
+    evidence = Path(record["evidence_path"])
+    evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
+    local = _next_frame_path(evidence)
+    _scp_from_guest(record, remote_png, local)
+    data = local.read_bytes()
+    if len(data) < 32 or data[:8] != PNG_SIGNATURE:
+        local.unlink(missing_ok=True)
+        raise ValueError("capture is not a valid PNG")
+    config_path = Path(record.get("source") or "") / "config/dock.json"
+    config_digest = (
+        hashlib.sha256(config_path.read_bytes()).hexdigest()
+        if config_path.is_file()
+        else None
+    )
+    local.with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "source_digest": record.get("source_digest"),
+                "config_digest": config_digest,
+                "guest_output": ready["output"],
+                "guest_display": ready["wayland_display"],
+                "guest_signature": ready["hyprland_instance_signature"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return local
 
 
 def _stderr_snippet(stderr: str | None, limit: int = 400) -> str:
@@ -1241,6 +1417,13 @@ def main(argv: list[str] | None = None) -> int:
     sync_parser = sub.add_parser("sync", help="copy candidate source one-way into the named guest")
     sync_parser.add_argument("name")
 
+    exec_parser = sub.add_parser("exec", help="run a literal command in the named guest")
+    exec_parser.add_argument("name")
+    exec_parser.add_argument("argv", nargs=argparse.REMAINDER)
+
+    capture_parser = sub.add_parser("capture", help="copy one guest grim PNG into NAME evidence")
+    capture_parser.add_argument("name")
+
     args = parser.parse_args(argv)
     if args.command == "prepare":
         paths = prepare_private_inputs(
@@ -1273,6 +1456,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "sync":
         print(sync_source(read_record(args.name)))
+        return 0
+    if args.command == "exec":
+        argv = list(args.argv)
+        if argv[:1] == ["--"]:
+            argv = argv[1:]
+        if not argv:
+            parser.error("exec requires a command after --")
+        return guest_exec(args.name, argv)
+    if args.command == "capture":
+        print(guest_capture(args.name))
         return 0
     parser.error(f"unsupported command: {args.command}")
     return 2

@@ -24,6 +24,8 @@ from dev_session import (  # noqa: E402
     reserve_port,
     session_dir,
     source_manifest,
+    guest_capture,
+    guest_exec,
     status,
     stop,
     sync_source,
@@ -185,13 +187,17 @@ class LifecycleTests(unittest.TestCase):
     def test_port_occupied_by_another_listener_is_skipped(self):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind(("127.0.0.1", 22000))
-        listener.listen()
+        occupied = 22000
+        try:
+            listener.bind(("127.0.0.1", occupied))
+            listener.listen()
+        except OSError:
+            occupied = 22000
         try:
             port = reserve_port(default_runtime_root(), "agent-b")
         finally:
             listener.close()
-        self.assertNotEqual(port, 22000)
+        self.assertNotEqual(port, occupied)
 
     def test_malformed_and_stale_records_are_reported(self):
         session = session_dir("agent-a")
@@ -475,6 +481,113 @@ class SourceSyncTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     sync_source(self.record)
         self.assertEqual(read_record("agent-sync")["source_digest"], "prior-digest")
+
+
+class GuestExecCaptureTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="dev-session-exec-"))
+        self.state_home = self.tmp / "state-home"
+        self.runtime_dir = self.tmp / "runtime"
+        self.state_home.mkdir()
+        self.runtime_dir.mkdir()
+        self.env = mock.patch.dict(
+            os.environ,
+            {
+                "XDG_STATE_HOME": str(self.state_home),
+                "XDG_RUNTIME_DIR": str(self.runtime_dir),
+            },
+        )
+        self.env.start()
+        self.session = session_dir("agent-exec")
+        self.session.mkdir(parents=True)
+        self.evidence = self.session / "evidence"
+        self.evidence.mkdir()
+        self.record = {
+            "name": "agent-exec",
+            "state": "starting",
+            "source": str(Path(__file__).resolve().parents[1]),
+            "source_digest": "abc123",
+            "port": 22002,
+            "qemu_pid": 1,
+            "qemu_start_ticks": 1,
+            "qemu_pgid": 1,
+            "evidence_path": str(self.evidence),
+            "error": None,
+            "guest_display": "wayland-1",
+            "guest_signature": "sig",
+            "guest_output": "Virtual-1",
+        }
+        (self.session / "record.json").write_text(
+            json.dumps(self.record), encoding="utf-8"
+        )
+
+    def tearDown(self):
+        self.env.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_exec_passes_literal_argv(self):
+        captured = {}
+
+        def fake_ssh(_record, command, _timeout):
+            captured["command"] = command
+            return subprocess.CompletedProcess(command, 0, stdout="ok\n", stderr="")
+
+        unique = self.tmp / "host-should-not-create"
+        with mock.patch("dev_session._run_ssh", side_effect=fake_ssh):
+            with mock.patch("dev_session.owned_process", return_value=True):
+                code = guest_exec(
+                    "agent-exec", ["echo", f"$(touch {unique})"]
+                )
+        self.assertEqual(code, 0)
+        self.assertIn(f"echo '$(touch {unique})'", captured["command"])
+        self.assertFalse(unique.exists())
+
+    def test_exec_returns_guest_exit_code(self):
+        def fake_ssh(_record, command, _timeout):
+            return subprocess.CompletedProcess(command, 17, stdout="", stderr="boom")
+
+        with mock.patch("dev_session._run_ssh", side_effect=fake_ssh):
+            with mock.patch("dev_session.owned_process", return_value=True):
+                self.assertEqual(guest_exec("agent-exec", ["false"]), 17)
+
+    def test_capture_rejects_non_png(self):
+        def fake_ssh(_record, command, _timeout):
+            if "grim" in command:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(
+                    {
+                        "wayland_display": "wayland-1",
+                        "hyprland_instance_signature": "sig",
+                        "output": "Virtual-1",
+                        "xdg_runtime_dir": "/run/user/1000",
+                    }
+                ),
+                stderr="",
+            )
+
+        def fake_scp(_record, remote, local):
+            del remote
+            Path(local).write_text("not a png", encoding="utf-8")
+
+        with mock.patch("dev_session._run_ssh", side_effect=fake_ssh):
+            with mock.patch("dev_session._scp_from_guest", side_effect=fake_scp):
+                with mock.patch("dev_session.owned_process", return_value=True):
+                    with self.assertRaisesRegex(ValueError, "PNG"):
+                        guest_capture("agent-exec")
+
+    def test_exec_and_capture_reject_stopped_or_failed(self):
+        for state in ("stopped", "failed"):
+            self.record["state"] = state
+            (self.session / "record.json").write_text(
+                json.dumps(self.record), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, state):
+                guest_exec("agent-exec", ["true"])
+            with self.assertRaisesRegex(ValueError, state):
+                guest_capture("agent-exec")
 
 
 if __name__ == "__main__":
