@@ -373,7 +373,7 @@ At the end of each task, append a short entry here. Record actual results only.
 
 | Task | Status | Local commit | Evidence / next action |
 | --- | --- | --- | --- |
-| 1. Platform feasibility | Not started | None | Must pass before launcher implementation. |
+| 1. Platform feasibility | BLOCKED | None | Isolation/placement/render PASS; inactive grim capture FAIL (3×10s timeout). Evidence under ~/.local/state/smartdock/dev-sessions/_task1-evidence/. Awaiting user decision: upgrade Aquamarine/Hyprland, VM/seat, or narrow visible-workspace contract. |
 | 2. Paths and targeting | Not started | None | Depends on verified Task 1 recipe. |
 | 3. Lifecycle | Not started | None | Depends on Task 2. |
 | 4. Standalone commands | Not started | None | Depends on Task 3. |
