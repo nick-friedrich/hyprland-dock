@@ -8,6 +8,8 @@ Local isolated docks for agent testing. **Guest display/capture feasibility pass
 | --- | --- |
 | Host-nested Hyprland (Aquamarine Wayland backend) | **Not qualified** — `grim` times out while the outer window is on an inactive host workspace (2026-09-15 Task 1 evidence). |
 | KVM guest (virtio-vga + guest Hyprland DRM) | **Display/capture feasibility PASS** — guest `grim` returns changing PNGs while the host QEMU window sits on inactive workspace `4` without stealing host focus. |
+| KVM guest standalone SmartDock | **LIVE PASS** — task4a qs pid 2816, private `~/.config/smartdock/dock.json`, frame-010.png. |
+| KVM guest Omarchy plugin SmartDock | **LIVE PASS** — Omarchy `4.0.3-1` (`version` file `4.0.0.alpha`); one guest qs pid 3415 at copied `smartdock-omarchy-test/shell/shell.qml` with Overlay.qml enabled; `--runtime plugin --instance 3415`; iconSize 42→48 guest-only; frame-011.png. First-party services were listed in `disabledPlugins`. Host `/usr/share/omarchy` and host `~/.config/smartdock/dock.json` were not edited. |
 
 Do not launch a second dock on the production display. Do not use `omarchy-shell` newest-instance targeting.
 
@@ -85,11 +87,9 @@ Candidate `AGENTS.md` SHA-256 matched between host and a copy into the guest (`S
 
 ### Not yet qualified (launcher / later tasks)
 
-- SmartDock standalone or Omarchy plugin host inside the guest
-- Nested guest input (`wtype`) while host pointer untouched
 - Concurrent two-VM sessions
 - Disposable guest image packaging in-repo
-- Repeatable source sync and virtiofs / 9p live source binds
+- virtiofs / 9p live source binds
 
 ## Agent workflow (after launcher exists)
 

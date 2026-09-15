@@ -207,6 +207,7 @@ start_dock() {
   export HYPRLAND_INSTANCE_SIGNATURE="${ready_fields[1]}"
   export XDG_RUNTIME_DIR="${ready_fields[3]:-$runtime_dir}"
   omarchy_path="${OMARCHY_PATH:-$HOME/smartdock-omarchy-test}"
+  mode="${SMARTDOCK_SESSION_MODE:-standalone}"
   if [[ ! -d "$omarchy_path/shell/Commons" || ! -d "$omarchy_path/shell/Ui" ]]; then
     echo "missing Omarchy qs.Commons/Ui test assets at $omarchy_path/shell" >&2
     exit 1
@@ -230,25 +231,41 @@ start_dock() {
   dock_pidfile="$state_root/dock.pid"
   mkdir -p "$state_root"
 
+  owned_dock() {
+    local pid=$1
+    local cmdline
+    cmdline=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+    [[ "$cmdline" == *"$candidate"* || "$cmdline" == *"$omarchy_path/shell"* ]]
+  }
+
   if [[ -f "$dock_pidfile" ]]; then
     old_pid=$(cat "$dock_pidfile")
-    if kill -0 "$old_pid" 2>/dev/null; then
-      cmdline=$(tr '\0' ' ' <"/proc/$old_pid/cmdline" 2>/dev/null || true)
-      if [[ "$cmdline" == *"$candidate"* ]]; then
-        python3 -c "import json; print(json.dumps({'pid': int('$old_pid'), 'config_path': '$dest', 'reused': True}))"
-        return
-      fi
+    if kill -0 "$old_pid" 2>/dev/null && owned_dock "$old_pid"; then
+      python3 -c "import json; print(json.dumps({'pid': int('$old_pid'), 'config_path': '$dest', 'reused': True}))"
+      return
     fi
     rm -f "$dock_pidfile"
   fi
 
-  nohup "$candidate/scripts/run" >"$dock_log" 2>&1 &
+  if [[ "$mode" == plugin ]]; then
+    if [[ ! -f "$omarchy_path/shell/shell.qml" ]]; then
+      echo "missing Omarchy plugin host at $omarchy_path/shell/shell.qml" >&2
+      exit 1
+    fi
+    if [[ ! -e "$HOME/.config/omarchy/plugins/io.github.fernandodamaso.smartdock/Overlay.qml" ]]; then
+      echo "missing guest SmartDock plugin Overlay.qml" >&2
+      exit 1
+    fi
+    nohup qs -p "$omarchy_path/shell" >"$dock_log" 2>&1 &
+  else
+    nohup "$candidate/scripts/run" >"$dock_log" 2>&1 &
+  fi
   echo $! >"$dock_pidfile"
   pid=$(cat "$dock_pidfile")
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 45); do
     if ! kill -0 "$pid" 2>/dev/null; then
       echo "guest dock exited before qs list" >&2
-      tail -n 80 "$dock_log" >&2 || true
+      tail -n 120 "$dock_log" >&2 || true
       exit 1
     fi
     list_json=$(qs list --all --json 2>/dev/null || true)
@@ -261,23 +278,24 @@ data = json.loads(raw)
 pid = int(sys.argv[1])
 raise SystemExit(0 if any(isinstance(item, dict) and item.get("pid") == pid for item in data) else 1)
 ' "$pid"; then
-      python3 -c "import json; print(json.dumps({'pid': int('$pid'), 'config_path': '$dest', 'reused': False}))"
+      python3 -c "import json; print(json.dumps({'pid': int('$pid'), 'config_path': '$dest', 'reused': False, 'mode': '$mode'}))"
       return
     fi
     sleep 1
   done
   echo "guest dock pid $pid never appeared in qs list --all --json" >&2
-  tail -n 80 "$dock_log" >&2 || true
+  tail -n 120 "$dock_log" >&2 || true
   exit 1
 }
 
 stop_dock() {
   dock_pidfile="$state_root/dock.pid"
+  omarchy_path="${OMARCHY_PATH:-$HOME/smartdock-omarchy-test}"
   [[ -f "$dock_pidfile" ]] || return 0
   pid=$(cat "$dock_pidfile")
   if kill -0 "$pid" 2>/dev/null; then
     cmdline=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
-    if [[ "$cmdline" == *"$candidate"* ]]; then
+    if [[ "$cmdline" == *"$candidate"* || "$cmdline" == *"$omarchy_path/shell"* ]]; then
       kill -TERM "$pid" 2>/dev/null || true
       for _ in $(seq 1 20); do
         kill -0 "$pid" 2>/dev/null || break

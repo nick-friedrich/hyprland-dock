@@ -28,6 +28,8 @@ from dev_session import (  # noqa: E402
     guest_exec,
     dock_argv,
     qualify_guest_dock,
+    first_party_plugin_ids,
+    plugin_shell_config,
     status,
     stop,
     sync_source,
@@ -653,6 +655,79 @@ class DockArgvTests(unittest.TestCase):
         wrong_mode["data"]["runtime"]["mode"] = "plugin"
         with self.assertRaises(ValueError):
             qualify_guest_dock(self.record, wrong_mode)
+
+
+class PluginHostTests(unittest.TestCase):
+    def test_rejects_standalone_mode_and_changed_pid(self):
+        record = {
+            "mode": "plugin",
+            "host_pid": 5555,
+            "config_path": "/home/admin/.config/smartdock/dock.json",
+        }
+        good = {
+            "ok": True,
+            "data": {
+                "runtime": {"mode": "plugin", "instanceId": "5555"},
+                "configPath": "/home/admin/.config/smartdock/dock.json",
+                "loadState": "loaded",
+            },
+        }
+        self.assertEqual(qualify_guest_dock(record, good)["runtime"]["mode"], "plugin")
+        argv = dock_argv(record, ["status", "--json"])
+        self.assertEqual(argv[argv.index("--runtime") + 1], "plugin")
+        self.assertEqual(argv[argv.index("--instance") + 1], "5555")
+        wrong_mode = json.loads(json.dumps(good))
+        wrong_mode["data"]["runtime"]["mode"] = "standalone"
+        with self.assertRaises(ValueError):
+            qualify_guest_dock(record, wrong_mode)
+        changed_pid = json.loads(json.dumps(good))
+        changed_pid["data"]["runtime"]["instanceId"] = "999"
+        with self.assertRaises(ValueError):
+            qualify_guest_dock(record, changed_pid)
+
+    def test_plugin_shell_config_enables_smartdock_and_disables_first_party(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "plugins"
+            (root / "bar").mkdir(parents=True)
+            (root / "idle").mkdir()
+            (root / "bar" / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "id": "omarchy.bar",
+                        "name": "Bar",
+                        "version": "1.0.0",
+                        "kinds": ["bar"],
+                        "entryPoints": {"bar": "Bar.qml"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "idle" / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "id": "omarchy.idle",
+                        "name": "Idle",
+                        "version": "1.0.0",
+                        "kinds": ["service"],
+                        "entryPoints": {"service": "Service.qml"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            ids = first_party_plugin_ids(root)
+            self.assertEqual(ids, ["omarchy.bar", "omarchy.idle"])
+            config = plugin_shell_config(ids)
+        self.assertEqual(config["version"], 1)
+        self.assertEqual(
+            config["plugins"],
+            [{"id": "io.github.fernandodamaso.smartdock"}],
+        )
+        self.assertEqual(sorted(config["disabledPlugins"]), ["omarchy.bar", "omarchy.idle"])
+        self.assertEqual(config["bar"]["layout"], {"left": [], "center": [], "right": []})
+        self.assertIsInstance(config["plugins"][0], dict)
+        self.assertNotIsInstance(config["plugins"][0], str)
 
 
 if __name__ == "__main__":

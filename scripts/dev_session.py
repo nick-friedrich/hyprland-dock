@@ -29,6 +29,7 @@ GUEST_CONFIG_PATH = "/home/admin/.config/smartdock/dock.json"
 GUEST_OMARCHY_TEST = "/home/admin/smartdock-omarchy-test"
 GUEST_CONTROL = f"{GUEST_CANDIDATE}/tests/runtime/dev-session/guest-control.sh"
 GUEST_SMARTDOCK = f"{GUEST_CANDIDATE}/scripts/smartdock"
+SMARTDOCK_PLUGIN_ID = "io.github.fernandodamaso.smartdock"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")
@@ -1014,6 +1015,7 @@ def _guest_exec_command(record: dict, argv: list[str]) -> str:
         "set -euo pipefail; "
         f"export SMARTDOCK_SESSION_NAME={shlex.quote(record['name'])}; "
         f"export SMARTDOCK_CANDIDATE={shlex.quote(GUEST_CANDIDATE)}; "
+        f"export SMARTDOCK_SESSION_MODE={shlex.quote(str(record.get('mode') or 'standalone'))}; "
         f"export READY={shlex.quote(ready)}; "
         f"eval \"$(python3 -c {shlex.quote(_guest_env_eval_script())})\"; "
         f"exec {joined}"
@@ -1118,6 +1120,38 @@ def guest_capture(name: str) -> Path:
     return local
 
 
+def first_party_plugin_ids(plugins_root: Path) -> list[str]:
+    """Read first-party plugin ids from installed-style manifest.json files."""
+    root = Path(plugins_root)
+    if not root.is_dir():
+        raise ValueError(f"plugin manifest root is missing: {root}")
+    ids = []
+    for manifest in sorted(root.rglob("manifest.json")):
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        plugin_id = data.get("id")
+        if not isinstance(plugin_id, str) or not plugin_id.strip():
+            raise ValueError(f"plugin manifest missing id: {manifest}")
+        ids.append(plugin_id.strip())
+    return sorted(set(ids))
+
+
+def plugin_shell_config(
+    first_party_ids: list[str], plugin_id: str = SMARTDOCK_PLUGIN_ID
+) -> dict:
+    """Private guest shell.json: enable SmartDock, disable first-party plugins."""
+    disabled = sorted({str(item) for item in first_party_ids if str(item) != plugin_id})
+    return {
+        "version": 1,
+        "bar": {
+            "position": "top",
+            "transparent": True,
+            "layout": {"left": [], "center": [], "right": []},
+        },
+        "plugins": [{"id": plugin_id}],
+        "disabledPlugins": disabled,
+    }
+
+
 def dock_argv(record: dict, args: list[str]) -> list[str]:
     """Build candidate CLI argv with exact recorded runtime/instance selectors."""
     parts = [str(part) for part in args]
@@ -1217,8 +1251,43 @@ def _guest_qs_instances(record: dict) -> list[dict]:
         raise RuntimeError(f"malformed guest qs list JSON: {exc}") from exc
 
 
+def _host_omarchy_root() -> Path:
+    return Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy"))
+
+
 def _host_omarchy_shell() -> Path:
-    return Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy")) / "shell"
+    return _host_omarchy_root() / "shell"
+
+
+def _extract_omarchy_archive(record: dict, tar_path: Path, remote: str, tests: list[str]) -> None:
+    extract = r"""
+import os, tarfile, sys
+from pathlib import Path
+dest = Path(sys.argv[1])
+archive = Path(sys.argv[2])
+dest.mkdir(parents=True, exist_ok=True)
+for path in [dest, *dest.rglob("*")]:
+    try:
+        mode = path.stat().st_mode
+        path.chmod(mode | 0o200)
+    except OSError:
+        pass
+with tarfile.open(archive, "r") as tar:
+    tar.extractall(dest, filter="data")
+""".strip()
+    _scp_to_guest(record, tar_path, remote)
+    checks = " && ".join(tests)
+    command = (
+        f"python3 -c {shlex.quote(extract)} {shlex.quote(GUEST_OMARCHY_TEST)} "
+        f"{shlex.quote(remote)} && chmod -R a-w {shlex.quote(GUEST_OMARCHY_TEST)}"
+        + (f" && {checks}" if checks else "")
+    )
+    result = _run_ssh(record, command, 60)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "failed to stage guest Omarchy test assets: "
+            f"{(result.stderr or result.stdout or '').strip()}"
+        )
 
 
 def stage_omarchy_qml_assets(record: dict) -> None:
@@ -1239,34 +1308,109 @@ def stage_omarchy_qml_assets(record: dict) -> None:
         tar.add(commons, arcname="shell/Commons")
         tar.add(ui, arcname="shell/Ui")
     os.replace(tmp, tar_path)
-    remote = f"/tmp/smartdock-omarchy-qml-{record['name']}.tar"
-    _scp_to_guest(record, tar_path, remote)
-    extract = r"""
-import os, tarfile, sys
-from pathlib import Path
-dest = Path(sys.argv[1])
-archive = Path(sys.argv[2])
-dest.mkdir(parents=True, exist_ok=True)
-for path in [dest, *dest.rglob("*")]:
-    try:
-        mode = path.stat().st_mode
-        path.chmod(mode | 0o200)
-    except OSError:
-        pass
-with tarfile.open(archive, "r") as tar:
-    tar.extractall(dest, filter="data")
-""".strip()
-    command = (
-        f"python3 -c {shlex.quote(extract)} {shlex.quote(GUEST_OMARCHY_TEST)} "
-        f"{shlex.quote(remote)} && chmod -R a-w {shlex.quote(GUEST_OMARCHY_TEST)} "
-        f"&& test -d {shlex.quote(GUEST_OMARCHY_TEST + '/shell/Commons')} "
-        f"&& test -d {shlex.quote(GUEST_OMARCHY_TEST + '/shell/Ui')}"
+    _extract_omarchy_archive(
+        record,
+        tar_path,
+        f"/tmp/smartdock-omarchy-qml-{record['name']}.tar",
+        [
+            f"test -d {shlex.quote(GUEST_OMARCHY_TEST + '/shell/Commons')}",
+            f"test -d {shlex.quote(GUEST_OMARCHY_TEST + '/shell/Ui')}",
+        ],
     )
-    result = _run_ssh(record, command, 30)
-    if result.returncode != 0:
+
+
+def stage_omarchy_plugin_host(record: dict) -> dict:
+    """Copy Omarchy shell host, first-party plugins, and defaults into the guest."""
+    root = _host_omarchy_root()
+    shell = root / "shell"
+    defaults = root / "config" / "omarchy" / "shell.json"
+    version = root / "version"
+    registry = shell / "services" / "PluginRegistry.qml"
+    if not (shell / "shell.qml").is_file() or not registry.is_file() or not defaults.is_file():
         raise RuntimeError(
-            "failed to stage guest Omarchy Commons/Ui test assets: "
-            f"{(result.stderr or result.stdout or '').strip()}"
+            f"host Omarchy plugin host files missing under {root}; "
+            "cannot stage guest plugin test assets"
+        )
+    evidence = Path(record["evidence_path"])
+    evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
+    inspected = {
+        "omarchy_package": "omarchy 4.0.3-1",
+        "omarchy_version_file": version.read_text(encoding="utf-8").strip() if version.is_file() else None,
+        "shell_qml_sha256": hashlib.sha256((shell / "shell.qml").read_bytes()).hexdigest(),
+        "plugin_registry_sha256": hashlib.sha256(registry.read_bytes()).hexdigest(),
+        "first_party_plugin_ids": first_party_plugin_ids(shell / "plugins"),
+    }
+    (evidence / "omarchy-revision.json").write_text(
+        json.dumps(inspected, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    tar_path = evidence / "omarchy-plugin-host.tar"
+    tmp = tar_path.with_name(tar_path.name + ".tmp")
+    with tarfile.open(tmp, "w") as tar:
+        tar.add(shell, arcname="shell")
+        tar.add(defaults, arcname="config/omarchy/shell.json")
+        if version.is_file():
+            tar.add(version, arcname="version")
+    os.replace(tmp, tar_path)
+    _extract_omarchy_archive(
+        record,
+        tar_path,
+        f"/tmp/smartdock-omarchy-plugin-{record['name']}.tar",
+        [
+            f"test -f {shlex.quote(GUEST_OMARCHY_TEST + '/shell/shell.qml')}",
+            f"test -f {shlex.quote(GUEST_OMARCHY_TEST + '/shell/services/PluginRegistry.qml')}",
+            f"test -d {shlex.quote(GUEST_OMARCHY_TEST + '/shell/plugins')}",
+        ],
+    )
+    return inspected
+
+
+def _host_theme_files() -> tuple[Path, Path]:
+    current = Path.home() / ".local/state/omarchy/current/theme"
+    colors = current / "colors.toml"
+    shell_toml = current / "shell.toml"
+    if colors.is_file() and shell_toml.is_file():
+        return colors, shell_toml
+    packaged = _host_omarchy_root() / "themes" / "tokyo-night"
+    colors = packaged / "colors.toml"
+    shell_toml = packaged / "shell.toml"
+    if not colors.is_file():
+        raise RuntimeError("no Omarchy theme colors.toml available to copy into the guest")
+    return colors, shell_toml
+
+
+def install_guest_plugin_runtime(record: dict, inspected: dict) -> None:
+    """Private guest shell.json, plugin symlink, and read-only theme copy."""
+    config = plugin_shell_config(inspected["first_party_plugin_ids"])
+    evidence = Path(record["evidence_path"])
+    local_shell = evidence / "guest-plugin-shell.json"
+    local_shell.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    colors, shell_toml = _host_theme_files()
+    _run_ssh(
+        record,
+        "mkdir -p /home/admin/.config/omarchy/plugins "
+        "/home/admin/.local/state/omarchy/current/theme",
+        10,
+    )
+    _scp_to_guest(record, local_shell, "/home/admin/.config/omarchy/shell.json")
+    _scp_to_guest(
+        record, colors, "/home/admin/.local/state/omarchy/current/theme/colors.toml"
+    )
+    _scp_to_guest(
+        record, shell_toml, "/home/admin/.local/state/omarchy/current/theme/shell.toml"
+    )
+    link = _run_ssh(
+        record,
+        "ln -sfn /home/admin/smartdock-candidate "
+        f"/home/admin/.config/omarchy/plugins/{shlex.quote(SMARTDOCK_PLUGIN_ID)} "
+        f"&& chmod a-w /home/admin/.local/state/omarchy/current/theme/colors.toml "
+        f"/home/admin/.local/state/omarchy/current/theme/shell.toml "
+        f"&& test -e /home/admin/.config/omarchy/plugins/{shlex.quote(SMARTDOCK_PLUGIN_ID)}/Overlay.qml",
+        10,
+    )
+    if link.returncode != 0:
+        raise RuntimeError(
+            "failed to install guest plugin runtime files: "
+            f"{(link.stderr or link.stdout or '').strip()}"
         )
 
 
@@ -1302,8 +1446,14 @@ def start_guest_dock(name: str) -> dict:
     record["guest_output"] = ready["output"]
     record["config_path"] = GUEST_CONFIG_PATH
     _write_record(record)
-    stage_omarchy_qml_assets(record)
-    started = _run_guest_argv(record, [GUEST_CONTROL, "start-dock"], 90)
+    _stop_guest_dock(record)
+    if record.get("mode") == "plugin":
+        inspected = stage_omarchy_plugin_host(record)
+        install_guest_plugin_runtime(record, inspected)
+    else:
+        stage_omarchy_qml_assets(record)
+        inspected = None
+    started = _run_guest_argv(record, [GUEST_CONTROL, "start-dock"], 120)
     if started.returncode != 0:
         raise RuntimeError(
             "guest start-dock failed: "
@@ -1352,6 +1502,8 @@ def start_guest_dock(name: str) -> dict:
                 "pid": launched_pid,
                 "qs_instance": matches[0],
                 "status": qualified,
+                "mode": record.get("mode"),
+                "omarchy": inspected,
             },
             indent=2,
             sort_keys=True,

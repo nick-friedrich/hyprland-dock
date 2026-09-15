@@ -138,9 +138,9 @@ class ContractTests(unittest.TestCase):
 
 **Files:** Modify `scripts/dev_session.py`, `tests/runtime/dev-session/guest-control.sh`, `tests/test_dev_session.py`, `docs/DEV_SESSIONS.md`.
 
-- [ ] **Step 1: Inspect** the exact Omarchy revision targeted by this source. Copy only required `shell/Commons`, `shell/Ui`, first-party plugin host files and theme assets into the guest test image/candidate area; keep host installed checkouts read-only. Start one Omarchy shell Quickshell process in the guest with SmartDock `Overlay.qml` enabled. Do not launch a second guest dock process or use a newest-instance wrapper. If shell core services require host-specific buses/portal/device state that the guest lacks, mark plugin mode unqualified with the exact failure; standalone remains usable.
-- [ ] **Step 2: Require guest CLI readback** `--runtime plugin --instance EXACT_PID status --json` with plugin mode, exact owned shell PID and guest private config path. Run one guest-only config mutation/readback and screenshot. Unit-test wrong-mode and changed-PID rejection.
-- [ ] **Step 3: Run targeted unit tests**, the guest plugin status/mutation/screenshot gate, and `omarchy plugin validate .` for plugin changes. Commit the tested task. If the guest shell lacks a required service, record its exact failure and mark this task BLOCKED; continue to Task 7's independent standalone concurrency gate.
+- [x] **Step 1: Inspect** the exact Omarchy revision targeted by this source. Copy only required `shell/Commons`, `shell/Ui`, first-party plugin host files and theme assets into the guest test image/candidate area; keep host installed checkouts read-only. Start one Omarchy shell Quickshell process in the guest with SmartDock `Overlay.qml` enabled. Do not launch a second guest dock process or use a newest-instance wrapper. If shell core services require host-specific buses/portal/device state that the guest lacks, mark plugin mode unqualified with the exact failure; standalone remains usable.
+- [x] **Step 2: Require guest CLI readback** `--runtime plugin --instance EXACT_PID status --json` with plugin mode, exact owned shell PID and guest private config path. Run one guest-only config mutation/readback and screenshot. Unit-test wrong-mode and changed-PID rejection.
+- [x] **Step 3: Run targeted unit tests**, the guest plugin status/mutation/screenshot gate, and `omarchy plugin validate .` for plugin changes. Commit the tested task. If the guest shell lacks a required service, record its exact failure and mark this task BLOCKED; continue to Task 7's independent standalone concurrency gate.
 
 **Gate:** Plugin CLI and rendering use the real guest Omarchy host, or plugin mode is explicitly blocked with evidence. Standalone qualification is unaffected.
 
@@ -164,7 +164,7 @@ class ContractTests(unittest.TestCase):
 | 3. One-way source sync | LIVE PASS | unit tests + live task3a two syncs (87a19c→deefb21→58b7fd), guest-only marker, idempotent stop; ~/.local/state/smartdock/dev-sessions/task3a/evidence/ |
 | 4. Guest compositor/input/capture | LIVE PASS | unit tests + live task4a Virtual-1 grim (input 001≠002, labeled colors 006–008 distinct), QEMU 1470347 on ws 4, host ws/window unchanged; ~/.local/state/smartdock/dev-sessions/task4a/evidence/ |
 | 5. Standalone dock | LIVE PASS | unit + qmltestrunner 207; live task4a qs pid 2816 standalone loaded at guest ~/.config/smartdock/dock.json; margin 10→14 persist; frame-010.png dock render; host qs 743034 / settings 7ccbbaf5 unchanged; minimize NOT RUN (no window CLI, empty clients); ~/.local/state/smartdock/dev-sessions/task4a/evidence/ |
-| 6. Plugin mode | Not started | |
+| 6. Plugin mode | LIVE PASS | omarchy 4.0.3-1; live task4a one qs pid 3415 at guest smartdock-omarchy-test/shell/shell.qml, --runtime plugin loaded, guest ~/.config/smartdock/dock.json; iconSize 42→48 persist; frame-011.png plugin dock; host qs 743034 / settings 7ccbbaf5 unchanged; ~/.local/state/smartdock/dev-sessions/task4a/evidence/ |
 | 7. Two agents/docs | Not started | |
 
 After each gate, update this ledger with PASS, FAIL or BLOCKED and exact evidence path/commit. Continue automatically after PASS. Task 6 plugin BLOCKED does not prevent Task 7 standalone concurrency. On any other failed gate, keep logs and report the concrete blocker without weakening isolation or touching host production state.
