@@ -58,26 +58,39 @@ def _paths(agent):
 ALLOWED = {path for agent in AGENTS for path in _paths(agent)}
 
 
-def _read_state(path):
+def _read_state(path, data):
     if not os.path.lexists(path):
-        return {}
+        return {}, False
     try:
         if path.is_symlink() or not stat.S_ISREG(path.stat().st_mode) or path.stat().st_size > 65536:
             raise ValueError("manifest must be a regular file under 64 KiB")
         manifest = json.loads(path.read_text(encoding="utf-8"))
         files = manifest["files"]
-        if (manifest.get("apiVersion") != 1 or not isinstance(files, dict)
+        version = manifest.get("apiVersion")
+        if (version not in (1, 2) or not isinstance(files, dict)
                 or any(key not in ALLOWED or not isinstance(value, str)
                        or len(value) != 64 or any(c not in "0123456789abcdef" for c in value)
                        for key, value in files.items())):
             raise ValueError("invalid ownership entries")
-        return dict(files)
+        data_home = str(data.resolve())
+        if version == 2:
+            if manifest.get("dataHome") != data_home:
+                raise ValueError("launcher manifest belongs to another XDG_DATA_HOME")
+            return dict(files), False
+        # Legacy v1 manifests have no data-root binding. Do not adopt ownership
+        # from an unrelated data root without a matching installed asset.
+        if files and not any(
+                _digest(data / relative) == checksum
+                for relative, checksum in files.items()
+                if os.path.lexists(data / relative)):
+            raise ValueError("unscoped legacy launcher manifest has no matching files in XDG_DATA_HOME")
+        return dict(files), True
     except (OSError, ValueError, UnicodeError, KeyError, TypeError) as error:
         raise LauncherError("Invalid launcher ownership manifest; refusing changes: "
                             + str(error)) from error
 
 
-def _persist(path, files):
+def _persist(path, files, data):
     if path.is_symlink():
         raise LauncherError("Refusing symlink ownership manifest.")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +98,8 @@ def _persist(path, files):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as output:
             os.fchmod(output.fileno(), 0o600)
-            json.dump({"apiVersion": 1, "files": files}, output, sort_keys=True)
+            json.dump({"apiVersion": 2, "dataHome": str(data.resolve()),
+                       "files": files}, output, sort_keys=True)
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())
@@ -120,7 +134,10 @@ def manage(action, environ=None, bundle=None):
         raise LauncherError("Expected launchers add or remove.")
     env = dict(os.environ if environ is None else environ)
     data, manifest = _roots(env)
-    owned = _read_state(manifest)
+    owned, legacy = _read_state(manifest, data)
+    if legacy:
+        # Bind validated legacy ownership before an operation can remove entries.
+        _persist(manifest, owned, data)
     assets = _asset_dir(bundle) if action == "add" else None
     result = {"added": [], "removed": [], "alreadyInstalled": [],
               "preserved": [], "missing": [], "availableAgents": []}
@@ -145,12 +162,12 @@ def manage(action, environ=None, bundle=None):
                 if action == "remove":
                     if not exists:
                         del owned[relative]
-                        _persist(manifest, owned)
+                        _persist(manifest, owned, data)
                         result["missing"].append(relative)
                     elif current == expected:
                         target.unlink()
                         del owned[relative]
-                        _persist(manifest, owned)
+                        _persist(manifest, owned, data)
                         result["removed"].append(relative)
                     else:
                         result["preserved"].append(relative)
@@ -167,7 +184,7 @@ def manage(action, environ=None, bundle=None):
                 _create(target, content)
                 try:
                     owned[relative] = digest
-                    _persist(manifest, owned)
+                    _persist(manifest, owned, data)
                 except Exception:
                     owned.pop(relative, None)
                     if _digest(target) == digest:
