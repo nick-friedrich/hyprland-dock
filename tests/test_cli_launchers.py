@@ -119,6 +119,57 @@ class SelectiveLauncherTests(unittest.TestCase):
         self.assertTrue(desktop.is_symlink())
         self.assertEqual(outside.read_text(), "private")
 
+    def test_manifest_rejects_a_different_data_home_without_losing_ownership(self):
+        self.agent("herdr")
+        self.action("add")
+        original = self.env["XDG_DATA_HOME"]
+        before = self.state.read_bytes()
+        manifest = json.loads(before)
+        self.assertEqual(manifest["apiVersion"], 2)
+        self.assertEqual(manifest["dataHome"], str(self.data.resolve()))
+
+        other_data = self.root / "other-data"
+        self.env["XDG_DATA_HOME"] = str(other_data)
+        try:
+            for command in ("remove", "add"):
+                with self.assertRaisesRegex(M.LauncherError, "another XDG_DATA_HOME"):
+                    self.action(command)
+        finally:
+            self.env["XDG_DATA_HOME"] = original
+
+        self.assertEqual(self.state.read_bytes(), before)
+        self.assertTrue(self.desktop("herdr").is_file())
+        self.assertFalse(other_data.exists())
+        self.action("remove")
+        self.assertFalse(self.desktop("herdr").exists())
+
+    def test_legacy_manifest_requires_matching_files_before_binding(self):
+        self.agent("herdr")
+        self.action("add")
+        legacy = json.loads(self.state.read_text())
+        legacy["apiVersion"] = 1
+        del legacy["dataHome"]
+        self.state.write_text(json.dumps(legacy), encoding="utf-8")
+        before = self.state.read_bytes()
+
+        original = self.env["XDG_DATA_HOME"]
+        self.env["XDG_DATA_HOME"] = str(self.root / "other-data")
+        try:
+            with self.assertRaisesRegex(M.LauncherError, "no matching files"):
+                self.action("remove")
+        finally:
+            self.env["XDG_DATA_HOME"] = original
+        self.assertEqual(self.state.read_bytes(), before)
+
+        # A genuine existing v1 installation remains manageable and is bound
+        # to its actual data root during the next operation.
+        self.action("add")
+        upgraded = json.loads(self.state.read_text())
+        self.assertEqual(upgraded["apiVersion"], 2)
+        self.assertEqual(upgraded["dataHome"], str(self.data.resolve()))
+        self.action("remove")
+        self.assertFalse(self.desktop("herdr").exists())
+
     def test_invalid_manifest_fails_closed(self):
         self.state.parent.mkdir(parents=True)
         self.state.write_text('{"apiVersion":1,"files":{"../../bad":"0"}}')

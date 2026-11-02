@@ -128,6 +128,13 @@ assets. Both work offline without a running host and never modify `dock.json`.
 
 Files are installed under `XDG_DATA_HOME` and tracked in
 `XDG_STATE_HOME/dockrail/terminal-agent-launchers.json` (standard XDG fallbacks).
+The version-2 ownership manifest records its data root and rejects a
+different `XDG_DATA_HOME` with the same `XDG_STATE_HOME`, rather than losing
+ownership of files in the original root. Existing version-1 manifests are
+migrated only when empty or when at least one recorded asset still matches
+the selected data root; otherwise the manager fails closed without changing
+launchers or ownership. Older launcher managers reject version-2 manifests;
+update the installed CLI before managing these launchers.
 Untracked, edited, symlinked or foreign files are preserved; JSON responses
 list them under `preserved`. Old assets from before INF-4 are **not silently
 adopted**; remove a known old file manually before adding a managed version.

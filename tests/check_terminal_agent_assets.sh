@@ -7,6 +7,7 @@ trap 'rm -rf -- "$test_root"' EXIT
 
 data_home="$test_root/data"
 config_home="$test_root/config"
+state_home="$test_root/state"
 bin_home="$test_root/bin"
 home_dir="$test_root/home"
 no_qs_bin="$test_root/no-qs"
@@ -67,7 +68,10 @@ raster_dir="$data_home/icons/hicolor/256x256/apps"
 export HOME="$home_dir"
 export XDG_DATA_HOME="$data_home"
 export XDG_CONFIG_HOME="$config_home"
+export XDG_STATE_HOME="$state_home"
+export XDG_CACHE_HOME="$test_root/cache"
 export XDG_BIN_HOME="$bin_home"
+unset DOCKRAIL_CONFIG SMARTDOCK_CONFIG DOCKRAIL_MIGRATION_FAIL_AFTER
 
 config_file="$config_home/smartdock/dock.json"
 install -d "$(dirname -- "$config_file")"
@@ -81,6 +85,8 @@ for agent in "${commands[@]}"; do
 done
 PATH="$no_qs_bin:/usr/bin:/bin" bash "$repo_dir/install.sh" --agent-assets-only \
   || fail "asset-only install failed without qs"
+
+assert_file "$state_home/dockrail/terminal-agent-launchers.json"
 
 for i in "${!ids[@]}"; do
   id="${ids[$i]}"
