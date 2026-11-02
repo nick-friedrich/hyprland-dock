@@ -226,7 +226,7 @@ Every response uses `apiVersion: 1`, Boolean `ok`, object `data`, array `warning
 | 3 | `E_RUNTIME_NOT_FOUND`, `E_RUNTIME_AMBIGUOUS` | Discover/choose the intended exact host; do not start one automatically. |
 | 4 | `E_PERSISTENCE`, `E_EXPORT` | Inspect live state and save/export error; a live change can remain unsaved. |
 | 5 | `E_TRANSPORT`, `E_PROTOCOL`, `E_TIMEOUT` | Verify installed compatibility and selected-host state; applied outcome can be unknown. |
-| 6 | `E_BUSY`, `E_CONFIG_INVALID` | Re-read once pending work settles, or explicitly repair the invalid file; do not replace defaults or retry forever. |
+| 6 | `E_BUSY`, `E_CONFIG_INVALID`, `E_STALE` | Re-read once pending work settles, explicitly repair an invalid file, or retry only after resolving a stale/disconnected focused-monitor target; do not replace defaults or retry forever. |
 
 ## Installation and lifecycle boundary
 
@@ -297,6 +297,43 @@ not the stable path. `uninstall` removes only Dockrail's entries. `dockrail
 claude hook` is the hook entry point itself (reads the hook payload on stdin,
 prints nothing, always exits 0). Errors exit 2 with a one-line message, or
 `{"ok":false,...}` with `--json`. See `docs/CLAUDE_DESKTOP.md`.
+
+## Focused-monitor presentation shortcut
+
+`mode toggle` (`dockrail mode toggle [--json]`) switches **Hyprland's focused, connected
+output** from `classic` to `sidebar`, or vice versa. It uses the selected
+running host; use `--runtime` or `--instance` when multiple hosts exist.
+The client passes no connector argument and never edits configuration.
+The host reads `Hyprland.focusedMonitor` when the shortcut runs; if there is
+no focused or connected output, it fails rather than choosing the first screen
+or using a remembered Settings anchor.
+
+When an output inherits `sidebar` but is **unmapped** because
+`sidebarMonitor` selects another output, the first toggle explicitly maps its
+sidebar (`modeSwitch.from: "unmapped"`, `to: "sidebar"`). The next toggle
+switches it to the classic dock; the existing `sidebarMonitor` pin is unchanged.
+
+The command reuses the mode gesture's live token validation and the sole
+FileView settings writer. It changes only the focused connector's
+`presentationModeByMonitor` entry. It preserves other connected/disconnected
+monitor overrides, global `presentationMode`, `sidebarMonitor`, and
+all other settings. A successful reply carries
+`data.modeSwitch: {connector, from, to}` alongside the usual mutation fields.
+`E_BUSY` can indicate an applied but not yet saved change;
+`E_PERSISTENCE` indicates failed persistence. Use `dockrail status --json`
+to confirm the final `writeState` and `persisted` flags.
+
+To bind it in Omarchy, first inspect `omarchy menu keybindings --print`.
+Then add to `~/.config/hypr/bindings.lua` (or select unused keys):
+
+```lua
+o.bind("SUPER + ALT + D", "Toggle Dockrail dock/sidebar", "dockrail mode toggle")
+```
+
+The binding is opt-in and does not override Omarchy defaults automatically.
+Use `o.rebind` only for an intentional override when supported. Validate with
+`hyprctl reload` followed by `hyprctl configerrors`. Focus refers to the
+Hyprland-focused monitor, not merely the screen under the mouse pointer.
 
 ## Sidebar configuration and diagnostics
 

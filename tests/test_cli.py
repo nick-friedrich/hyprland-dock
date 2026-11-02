@@ -37,6 +37,8 @@ assert request['apiVersion'] == 1
 print('fixture diagnostic', file=sys.stderr)
 if request['command'] in ('status', 'doctor'):
     data = dict(host['status'])
+elif request['command'] == 'mode.toggle':
+    data = host.get('modeData', {})
 else:
     data = host.get('data', {'settings': {'iconSize': 42}, 'source': 'requested'})
 print(json.dumps({'apiVersion': host.get('apiVersion', 1), 'ok': True, 'data': data, 'warnings': []}))
@@ -116,6 +118,29 @@ class CliTests(unittest.TestCase):
             self.assertEqual(value['error']['code'], 'E_USAGE')
         self.assertFalse(self.calls.exists())
         self.assert_no_state()
+
+    def test_mode_toggle_routes_to_selected_host_without_connector(self):
+        reply = self.response(('mode', '--json'), 2)
+        self.assertEqual(reply['error']['code'], 'E_USAGE')
+        self.assertFalse(self.calls.exists())
+
+        self.set_hosts('plugin')
+        fixture = json.loads(self.fixture.read_text())
+        status = dict(fixture['hosts']['101']['status'])
+        status.update({'loadPending': False, 'revision': 1, 'writeState': 'saved',
+                       'persisted': True, 'applied': True, 'noop': False,
+                       'changedKeys': ['presentationModeByMonitor'],
+                       'requested': {}, 'effective': {},
+                       'modeSwitch': {'connector': 'DP-2', 'from': 'classic',
+                                      'to': 'sidebar'}})
+        fixture['hosts']['101']['modeData'] = status
+        self.fixture.write_text(json.dumps(fixture))
+        response = self.response(('mode', 'toggle', '--json'))
+        self.assertEqual(response['data']['modeSwitch']['connector'], 'DP-2')
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        ipc = json.loads(calls[-1][-1])
+        self.assertEqual(ipc['command'], 'mode.toggle')
+        self.assertEqual(ipc['arguments'], {})
 
     def test_missing_runtime_and_read_only_doctor(self):
         for command in ('status', 'doctor'):

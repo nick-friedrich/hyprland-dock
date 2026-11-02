@@ -350,6 +350,7 @@ Item {
         || (args.dryRun !== undefined && typeof args.dryRun !== "boolean"))
       return root.failure("E_USAGE", "Invalid arguments for " + command)
     if (command === "status" || command === "doctor") return root.success(root.statusData())
+    if (command === "mode.toggle") return root.host.toggleFocusedMonitorMode()
     if (command === "config.apply") return root.host.saveSettings(args.patch, args.dryRun === true)
     if (command === "config.retry") return root.host.retrySettings()
     if (command === "config.reset") {

@@ -478,7 +478,11 @@ Item {
       if (root.resizeActive && root.resizeScreenAtStart
           && !nextMapped.some(function(screen) { return screen.name === root.resizeConnectorAtStart }))
         root.cancelResize("host-changed")
-      root.cancelRowDrag("host-changed")
+      // A new or removed *other* sidebar must not abort a drag on a surviving
+      // panel. Its own teardown or lost membership still cancels the gesture.
+      if (root.dragSession && !nextMapped.some(function(screen) {
+        return screen && screen.name === root.dragSession.connector
+      })) root.cancelRowDrag("host-changed")
       // Do not tear down all panels on hotplug; Variants adopts mappedScreens.
       root.mappedScreens = nextMapped
       root.selectedScreen = nextPrimary

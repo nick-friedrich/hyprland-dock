@@ -21,7 +21,7 @@ EXIT_CODES = {
     'E_RUNTIME_NOT_FOUND': 3, 'E_RUNTIME_AMBIGUOUS': 3,
     'E_PERSISTENCE': 4, 'E_EXPORT': 4,
     'E_TRANSPORT': 5, 'E_PROTOCOL': 5, 'E_TIMEOUT': 5, 'E_SETUP': 5,
-    'E_BUSY': 6, 'E_CONFIG_INVALID': 6,
+    'E_BUSY': 6, 'E_CONFIG_INVALID': 6, 'E_STALE': 6,
 }
 HELP = '''Usage: dockrail [OPTIONS] COMMAND
 
@@ -42,6 +42,9 @@ Guided setup (requires one selected running host):
   setup                        Interactive readiness + optional feature setup on a TTY
   setup --feature NAME --yes   Script one feature: chrome | herdr | launcher-counts |
                                agent-launchers
+
+Live presentation (the selected host is the only writer):
+  mode toggle                  Toggle dock/sidebar on Hyprland's focused monitor
 
 Live configuration (the selected host is the only writer):
   config set KEY VALUE         Parse VALUE using the live setting's declared type
@@ -1378,6 +1381,8 @@ def build_parser():
     commands = parser.add_subparsers(dest='group')
     for name in ('help', 'agent-guide', 'status', 'doctor', 'settings'):
         child_parser(commands, name)
+    mode = child_parser(commands, 'mode').add_subparsers(dest='action')
+    child_parser(mode, 'toggle')
     launchers = child_parser(commands, 'launchers').add_subparsers(dest='action')
     child_parser(launchers, 'add')
     child_parser(launchers, 'remove')
@@ -1624,7 +1629,7 @@ def execute(args):
             return envelope({'text': (BUNDLE / 'docs/AGENT_CONFIGURATION.md').read_text(encoding='utf-8')})
         except (OSError, UnicodeError) as error:
             raise CliError('E_PROTOCOL', 'Bundled agent guide is unavailable: ' + str(error)) from error
-    if args.group in ('config', 'apps', 'icons') and args.action is None:
+    if args.group in ('mode', 'config', 'apps', 'icons') and args.action is None:
         raise CliError('E_USAGE', args.group + ' requires a subcommand. Run dockrail help.')
     if args.group == 'setup' and args.feature is None and args.yes:
         raise CliError(
@@ -1656,6 +1661,8 @@ def execute(args):
         if args.group == 'doctor':
             error.data['checks'] = checks
         raise
+    if args.group == 'mode':
+        return validate_mutation(transport.request(instance, 'mode.toggle'), instance)
     if args.group == 'settings':
         # Fixed no-arg IPC entry point. Never use the CLI configuration mutator
         # to implement a second UI writer.

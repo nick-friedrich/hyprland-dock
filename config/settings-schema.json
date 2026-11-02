@@ -25,6 +25,7 @@
     "icons.set",
     "icons.reset",
     "icons.reload",
+    "mode.toggle",
     "settings"
   ],
   "settings": {

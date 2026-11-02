@@ -696,15 +696,52 @@ Item {
       return { accepted: false, pending: false,
         reply: dockControl.failure("E_STALE",
           "Preference changed after the interaction started; refresh before retrying.") }
-    // Copy the live map — never a captured one — and touch only this gesture's
-    // connector. Disconnected entries and foreign overrides are preserved; the
-    // writer's stale check compares against that same live map.
+    // Preserve the existing mode-switch contract shared by menu, drag and
+    // Settings: normalize malformed legacy values before constructing a new
+    // validated map. Do not turn a shortcut-only hardening change into a
+    // rejection for unrelated, disconnected invalid entries.
+    // The writer's stale check still compares the entire live raw value.
     var expected = settings.presentationModeByMonitor
     var nextMap = Object.assign({},
       DockModel.normalizeSetting("presentationModeByMonitor", expected))
     if (mode === "default") delete nextMap[name]
     else nextMap[name] = mode
     return saveSettingIntent("presentationModeByMonitor", nextMap, expected)
+  }
+
+  // A shortcut targets Hyprland's currently focused output, never the
+  // Settings panel's remembered connector or the first connected display.
+  // Reuse the same token guard and sole FileView writer as menu/drag switching.
+  function toggleFocusedMonitorMode() {
+    var focused = focusedHyprlandMonitor
+    var connector = focused ? String(focused.name || "").trim() : ""
+    if (!connector)
+      return dockControl.failure("E_RUNTIME_NOT_FOUND",
+        "Hyprland has no focused monitor; no presentation was changed.")
+    var current = currentPresentation()
+    var entry = ScreenPresentationModel.entryFor(current, connector)
+    // During hotplug Quickshell may still list a screen Hyprland has removed.
+    // Require the connector in both inventories before applying a shortcut.
+    if (!entry || !DockWindowModel.monitorForScreen(entry.screen, hyprMonitors))
+      return dockControl.failure("E_STALE",
+        "The focused monitor is not a connected Dockrail output; no presentation was changed.")
+    // An inherited sidebar can be intentionally unmapped by sidebarMonitor.
+    // First reveal that screen's sidebar; only a visible sidebar toggles to dock.
+    var destination = entry.mode === "sidebar" && entry.mapped ? "classic" : "sidebar"
+    var token = ScreenPresentationModel.modeGestureToken(current, connector)
+    // Scope a failed save to this output, as the existing menu switch does.
+    var previousOrigin = modeMenuWriteConnector
+    modeMenuWriteConnector = connector
+    var outcome = monitorModeIntent(connector, destination, token)
+    var feedback = DockModel.modeDragWriteError(outcome)
+    setModeGestureFeedback(connector, feedback)
+    if (feedback) modeMenuWriteConnector = previousOrigin
+    // A rejected/busy preflight is only a proposal, not a mode switch.
+    if (outcome.accepted && outcome.reply && outcome.reply.data)
+      outcome.reply.data.modeSwitch = {
+        connector: connector, from: entry.mapped ? entry.mode : "unmapped", to: destination
+      }
+    return outcome.reply
   }
 
   // One position request from either renderer. Dragging the bottom dock's empty
