@@ -190,3 +190,43 @@ At the inspected head, these existing Node checks all exited 0: `/home/admin/Pro
 
 The questions asked so far are resolved. The initial native drag prototype remains a technical feasibility gate, not an unanswered product decision.
 
+
+## Execution status — 2026-11-03 handoff
+
+This section records what actually exists, so an agent on another machine can
+continue without the originating chat. Base for everything below is
+`origin/main` `ff7d452284c1bd065fdb0d344a98eb3c864bc9ef`; the inspection head
+`6da1551` was 64 commits stale when execution started.
+
+| Task | State | Evidence |
+| --- | --- | --- |
+| 1 — native drag feasibility | **STAGED, NOT EXECUTED — gate open** | `tests/runtime/external-drag-navigation.md` (matrix A–I all NOT EXECUTED, instrumentation contract and case matrix retained, temporary prototype reverted) |
+| 2 — settings, coordinator, adapter, `focusToplevelInPlace` | **DONE** | 18 coordinator + 8 adapter QML assertions, config/schema/registry/CLI/grouped-actions/session-pins suites |
+| 3 — sidebar rows, badges, tabs, group expansion | **DONE** | 26 coordinator + 13 adapter QML assertions, sidebar controller/interaction/inline-badge/split-scroll suites |
+| 4 — classic dock, reveal strip, window previews | **NOT STARTED** | no Task 4 code exists |
+| 5 — full CI, real content matrix, Draft PR | **NOT STARTED** | — |
+
+Branch layout: `feat/edhn-surfaces` contains Task 2 and Task 3 stacked on
+`origin/main`; `feat/edhn-gate-t1` holds the Task 1 runtime document, which is
+also cherry-picked onto `feat/edhn-surfaces`.
+
+Before Task 4 or 5 continue, run the Task 1 matrix on a machine with a real
+desktop and real applications. Two adapter decisions are deliberately
+unresolved and must be settled by that run:
+
+1. Whether accepting drag entry (`drag.accepted = true` in `onEntered` /
+   `onPositionChanged`) changes the action cursor or harms the final drop.
+2. Whether a focus/workspace change during the drag emits a spurious
+   `onExited`/unmap that must be distinguished from a genuine pointer exit.
+   Related: whether `focusToplevelInPlace` warps the pointer.
+
+Task 4's remaining wiring is enumerated in that task's Files/Interfaces block
+and in the handoff section of the runtime document. Nothing in Tasks 2–3 reads
+drag payloads, writes configuration, or moves windows; keep it that way.
+
+## Execution status — Environment note
+
+The KVM route was abandoned at the owner's direction because the guest could not
+be driven by the owner on the development machine. The gate must therefore run
+on a real desktop, not in a guest. Do not reuse the two local, uncommitted
+harness workarounds recorded in the runtime document as precedent.
