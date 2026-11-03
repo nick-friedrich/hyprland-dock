@@ -804,6 +804,29 @@ TestCase {
     controller.destroy()
   }
 
+  function test_sidebarExternalRailExposesWindowsOnly() {
+    var fixture = makeSidebarFixture()
+    var controller = fixture.controller
+    var railRows = controller.railProjection.rows || []
+    compare(railRows.filter(function(row) {
+      return row.kind === "application"
+    }).length, 0, "rail mode renders no application headers")
+    compare(railRows.filter(function(row) {
+      return row.kind === "browser-tab"
+    }).length, 0, "rail mode renders no browser-tab children")
+    var railWindow = railRows.filter(function(row) {
+      return row.kind === "window" && row.toplevel === fixture.solo
+    })[0]
+    verify(railWindow, "rail mode already exposes individual windows")
+    compare(controller.externalDragTarget(railWindow.key).kind, "window")
+    var railWorkspace = railRows.filter(function(row) {
+      return row.kind === "workspace"
+    })[0]
+    verify(railWorkspace, "rail mode keeps workspace badge rows")
+    compare(controller.externalDragTarget(railWorkspace.key).kind, "workspace")
+    controller.destroy()
+  }
+
   function test_sidebarExternalCtrlNeverRoutesRelocation() {
     var fixture = makeSidebarFixture()
     var controller = fixture.controller
