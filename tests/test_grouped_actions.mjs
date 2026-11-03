@@ -177,8 +177,43 @@ function expectSequence(steps, usingLua, label) {
     ]], label)
   }
 }
+// External drag hover uses the same in-place focus path as ordinary activation.
+for (const usingLua of [false, true]) {
+  hyprland.usingLua = usingLua
+  const restore = 'movetoworkspace name:Design work,address:0x1'
+  const luaRestore = 'hl.dsp.window.move({ window = "address:0x1", workspace = "name:Design work", follow = true })'
+  const focus = usingLua
+    ? 'hl.dsp.focus({ window = "address:0x1" })' : 'focuswindow address:0x1'
+  handles[0].lastIpcObject = { workspace: { name: 'special:smartdock-minimized' }, monitor: 0 }
+  actions.minimizedOrigins = { '0x1': { workspace: 'name:Design work', monitor: '0' } }
+  clearSubmissions()
+  assert.equal(actions.focusToplevelInPlace(windows[0]), true)
+  expectRequests(requests, [usingLua ? luaRestore : restore, focus],
+    `hover restores then focuses explicitly (${usingLua ? 'lua' : 'legacy'})`)
+  expectRequests(batches, [], 'hover never batches or relocates a monitor')
+}
+hyprland.usingLua = false
+handles[0].lastIpcObject = { workspace: { id: 9 }, monitor: 1 }
+actions.minimizedOrigins = {}
+clearSubmissions()
+assert.equal(actions.focusToplevelInPlace(windows[0]), true)
+expectRequests(requests, ['focuswindow address:0x1'],
+  'hover focuses a normal window where it currently lives')
+assert.doesNotMatch(requests.join(' '), /moveworkspace|movecurrentworkspace/i,
+  'hover never pulls a destination to another monitor')
+handles[0].lastIpcObject = { workspace: { name: 'special:smartdock-minimized' }, monitor: 0 }
+actions.minimizedOrigins = { '0x1': { workspace: 'name:bad,dispatch', monitor: '0' } }
+clearSubmissions()
+assert.equal(actions.focusToplevelInPlace(windows[0]), false,
+  'a stale/invalid minimized origin fails closed')
+expectRequests(requests, [], 'no restore or focus dispatch after a stale origin')
+clearSubmissions()
+assert.equal(actions.focusToplevelInPlace({}), false, 'a dead toplevel is not focusable')
+expectRequests(requests, [])
+
 hyprland.usingLua = true
 handles[0].lastIpcObject = { workspace: { id: 9 }, monitor: 1 }
+actions.minimizedOrigins = {}
 clearSubmissions()
 assert.equal(item.dispatchPointerAction('left', {}), true)
 expectRequests(requests, [
