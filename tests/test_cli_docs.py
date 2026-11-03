@@ -300,7 +300,7 @@ class CliDocumentationTests(unittest.TestCase):
         frozen = re.findall(
             r'^\| `([^`]+)` \| (?:Appearance|Layout|Behavior|Sidebar & Widgets|Apps) \|',
             record, re.M)
-        self.assertEqual(len(frozen), 60)
+        self.assertEqual(len(frozen), 62)
         keys = set(json.loads((ROOT / 'config/settings-schema.json').read_text())['settings'])
         self.assertEqual(set(frozen), keys)
 

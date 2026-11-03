@@ -3,7 +3,7 @@ import { read, loadModel, hostHarness, plain } from './host_harness.mjs';
 
 const settings = JSON.parse(read('config/settings-schema.json')).settings;
 const keys = Object.keys(settings);
-assert.equal(keys.length, 60);
+assert.equal(keys.length, 62);
 const ui = Object.fromEntries(keys.map(key => [key, settings[key].ui]));
 const allowedSections = new Set(['appearance', 'layout', 'behavior', 'sidebar-widgets', 'apps']);
 const allowedVisibility = new Set(['normal', 'conditional', 'advanced', 'hidden', 'in-place']);
@@ -50,6 +50,26 @@ for (const [owner, row] of grouped) {
 assert.equal(ui.sidebarBrowserTabsEnabled.section, 'apps');
 assert.equal(ui.sidebarInlineSoloWorkspace.section, 'layout');
 assert.equal(ui.workspaceMonitorOrder.group, 'displays');
+assert.equal(ui.dragHoverNavigationEnabled.section, 'behavior');
+assert.equal(ui.dragHoverNavigationEnabled.group, 'windows');
+assert.equal(ui.dragHoverNavigationEnabled.surface, 'all');
+assert.equal(ui.dragHoverNavigationEnabled.control, 'toggle');
+assert.equal(ui.dragHoverDelayMs.section, 'behavior');
+assert.equal(ui.dragHoverDelayMs.group, 'windows');
+assert.equal(ui.dragHoverDelayMs.surface, 'all');
+assert.equal(ui.dragHoverDelayMs.control, 'slider');
+assert.equal(ui.dragHoverDelayMs.unit, 'ms');
+assert.deepEqual(plain(ui.dragHoverDelayMs.requires),
+                 { dragHoverNavigationEnabled: true });
+assert.equal(settings.dragHoverNavigationEnabled.type, 'boolean');
+assert.equal(settings.dragHoverDelayMs.type, 'integer');
+assert.equal(settings.dragHoverDelayMs.minimum, 100);
+assert.equal(settings.dragHoverDelayMs.maximum, 2000);
+assert.equal(settings.dragHoverDelayMs.effectiveStep, 100);
+assert.ok(!classic.includes('dragHoverNavigationEnabled'),
+  'external drag navigation applies to both presentations');
+assert.ok(!classic.includes('dragHoverDelayMs'),
+  'the drag hover delay applies to both presentations');
 assert.equal(ui.position.visibility, 'hidden');
 assert.equal(ui.sidebarMonitor.visibility, 'hidden');
 assert.equal(ui.sidebarWidgetCollapsed.visibility, 'in-place');
@@ -64,4 +84,4 @@ const rows = plain(widgetModel.registeredRows({
 }));
 assert.equal(rows[0].feature, 'herdr');
 assert.equal(rows[0].description, 'Show agent sessions');
-console.log('Settings metadata: 59 schema keys, paired controls, host classic projection and shortcuts OK');
+console.log('Settings metadata: 62 schema keys, paired controls, host classic projection and shortcuts OK');

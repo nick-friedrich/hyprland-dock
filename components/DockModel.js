@@ -400,6 +400,8 @@ function settingsDefaults() {
     hoverGlowOpacity: 0.72,
     hoverGlowRadius: 28,
     showPreviews: true,
+    dragHoverNavigationEnabled: true,
+    dragHoverDelayMs: 500,
     showTrash: true,
     backgroundOpacity: 0.88,
     backgroundColorEnabled: false,
@@ -770,8 +772,11 @@ function normalizeSetting(key, value) {
     return steppedNumber(value, 0, 100, 5, defaults.hoverGlowRadius, 0)
   case "backgroundOpacity":
     return steppedNumber(value, 0, 1, 0.05, defaults.backgroundOpacity, 2)
+  case "dragHoverDelayMs":
+    return steppedNumber(value, 100, 2000, 100, defaults.dragHoverDelayMs, 0)
   case "hoverGlowEnabled":
   case "showPreviews":
+  case "dragHoverNavigationEnabled":
   case "showTrash":
   case "backgroundColorEnabled":
   case "borderColorEnabled":

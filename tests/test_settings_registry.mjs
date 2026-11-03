@@ -7,8 +7,9 @@ assert.deepEqual(all.map(s=>s.id),['appearance','layout','behavior','sidebar-wid
 const homes=all.flatMap(s=>s.rows.map(row=>row.key))
 // FDM-1040 froze 58; FDM-1051 slice 3 adds dockT3Indicators and Claude Desktop
 // adds dockClaudeIndicators (behavior/attention, shared with dock and sidebar).
-assert.equal(homes.length,60)
-assert.equal(new Set(homes).size,60)
+// External drag adds dragHoverNavigationEnabled and dragHoverDelayMs.
+assert.equal(homes.length,62)
+assert.equal(new Set(homes).size,62)
 const variants=[
  [1,'flat'],[1,'grouped'],[2,'flat'],[2,'grouped']
 ]

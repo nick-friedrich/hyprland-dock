@@ -8,6 +8,8 @@
   "hoverGlowOpacity": 0.72,
   "hoverGlowRadius": 28,
   "showPreviews": true,
+  "dragHoverNavigationEnabled": true,
+  "dragHoverDelayMs": 500,
   "showTrash": true,
   "margin": 10,
   "backgroundOpacity": 0.88,
