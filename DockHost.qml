@@ -389,6 +389,7 @@ Item {
   property bool workspaceCountsRefreshPending: false
   property int scopeRevision: scopeRefreshController.revision
   readonly property var windowActions: windowActionsController
+  readonly property var externalDragNavigation: externalDragNavigationController
   readonly property var herdrWindowAgents: herdrWindowAgentsController
   readonly property var herdrAgentActions: herdrAgentActionsController
   readonly property var workspaceMonitorDrag: workspaceMonitorDragController
@@ -1146,6 +1147,16 @@ Item {
   DockWindowActions {
     id: windowActionsController
     applicationMutationController: root
+  }
+
+  DockExternalDragNavigation {
+    id: externalDragNavigationController
+    windowActions: root.windowActions
+    sidebarController: root.sidebarController
+    enabled: DockModel.normalizeSetting(
+      "dragHoverNavigationEnabled", root.settings.dragHoverNavigationEnabled)
+    dwellMs: DockModel.normalizeSetting(
+      "dragHoverDelayMs", root.settings.dragHoverDelayMs)
   }
 
   DockHerdrWindowAgents {
