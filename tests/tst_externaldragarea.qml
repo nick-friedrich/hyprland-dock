@@ -71,6 +71,47 @@ TestCase {
     DockExternalDragArea {}
   }
 
+  // Minimal sidebar controller facade for the row-input wiring: descriptors
+  // resolve from a key table and the click/focus capture path is observed so the
+  // test can prove external hover never enters it.
+  QtObject {
+    id: rowController
+    property bool rowDragActive: false
+    property bool resizeActive: false
+    property bool interactionBusy: false
+    property string selectedConnector: "DP-1"
+    property var externalDragNavigation: null
+    property var targets: ({})
+    property int captureCount: 0
+    property int focusRequestCount: 0
+    function reset() {
+      rowDragActive = false
+      resizeActive = false
+      interactionBusy = false
+      targets = ({})
+      captureCount = 0
+      focusRequestCount = 0
+    }
+    function externalDragTarget(key) { return targets[String(key)] || null }
+    function captureTarget(key) {
+      captureCount++
+      return targets[String(key)] || null
+    }
+    function rememberNavigationFocus() { focusRequestCount++ }
+  }
+
+  Component {
+    id: rowInputFactory
+    DockSidebarRowInput {}
+  }
+
+  function windowDescriptor(key) {
+    return {key: key, kind: "window", toplevel: null}
+  }
+  function workspaceDescriptor(key) {
+    return {key: key, kind: "workspace", workspaceIdentity: "id:1"}
+  }
+
   function init() {
     source.x = 10
     source.y = 10
@@ -226,5 +267,169 @@ TestCase {
     target.destroy()
     nav.endSession()
     verify(!nav.heldFor(surface))
+  }
+
+  // --- Sidebar row/input wiring ---------------------------------------------
+
+  function sidebarRowInput(nav, surface, properties) {
+    var values = Object.assign({
+      x: 10, y: 100, width: 200, height: 120,
+      controller: rowController, navigationOwner: surface
+    }, properties || ({}))
+    var input = createTemporaryObject(rowInputFactory, this, values)
+    verify(input)
+    return input
+  }
+
+  function test_rowInputAdapterTracksWithoutClickOrFocusPath() {
+    rowController.reset()
+    var nav = makeNavigation()
+    rowController.externalDragNavigation = nav
+    rowController.targets = {"window:row": windowDescriptor("window:row")}
+    var surface = createTemporaryObject(surfaceFactory, this)
+    var input = sidebarRowInput(nav, surface, {rowKey: "window:row"})
+    verify(input.externalDragArea, "the row input owns a native drag region")
+    compare(input.externalDragArea.navigation, nav)
+    compare(input.externalTarget.kind, "window")
+    compare(input.externalTarget.priority, 0)
+    verify(input.externalEligible)
+
+    input.externalDragArea.begin()
+    compare(nav.pending.key, "window:row")
+    compare(rowController.captureCount, 0,
+      "external hover never captures a press target")
+    compare(rowController.focusRequestCount, 0,
+      "external hover never remembers keyboard navigation focus")
+    verify(!input.pressed)
+    verify(!input.dragOwned)
+    input.externalDragArea.release(false)
+    verify(!nav.pendingActive)
+    nav.endSession()
+  }
+
+  function test_rowInputInternalStateSuppressesExternalNavigation() {
+    rowController.reset()
+    var nav = makeNavigation()
+    rowController.externalDragNavigation = nav
+    rowController.targets = {"window:row": windowDescriptor("window:row")}
+    var surface = createTemporaryObject(surfaceFactory, this)
+    var input = sidebarRowInput(nav, surface, {rowKey: "window:row"})
+    rowController.rowDragActive = true
+    verify(!input.externalEligible, "an internal row drag suppresses external navigation")
+    input.externalDragArea.begin()
+    compare(nav.pending, null)
+    rowController.rowDragActive = false
+    rowController.resizeActive = true
+    verify(!input.externalEligible)
+    rowController.resizeActive = false
+    rowController.interactionBusy = true
+    verify(!input.externalEligible, "an incompatible modal interaction suppresses navigation")
+    rowController.interactionBusy = false
+    verify(input.externalEligible)
+    nav.endSession()
+  }
+
+  function test_inlineBadgePriorityWinsInBothEntryOrders() {
+    rowController.reset()
+    var nav = makeNavigation()
+    rowController.externalDragNavigation = nav
+    rowController.targets = {
+      "window:row": windowDescriptor("window:row"),
+      "workspace:1": workspaceDescriptor("workspace:1")
+    }
+    var surface = createTemporaryObject(surfaceFactory, this)
+    var row = sidebarRowInput(nav, surface, {rowKey: "window:row"})
+    var badge = sidebarRowInput(nav, surface, {
+      x: 10, y: 100, width: 40, height: 22, z: 2,
+      rowKey: "workspace:1", externalPriority: 10
+    })
+    compare(badge.externalTarget.priority, 10)
+
+    row.externalDragArea.begin()
+    badge.externalDragArea.begin()
+    compare(nav.pending.key, "workspace:1", "the badge wins when it enters second")
+    nav.cancelOwner(surface)
+
+    badge.externalDragArea.begin()
+    row.externalDragArea.begin()
+    compare(nav.pending.key, "workspace:1",
+      "a row entering after its badge does not replace the child target")
+    nav.endSession()
+  }
+
+  function test_partiallyClippedBadgeClaimsOnlyVisibleRectangle() {
+    rowController.reset()
+    var nav = makeNavigation()
+    rowController.externalDragNavigation = nav
+    rowController.targets = {
+      "window:row": windowDescriptor("window:row"),
+      "workspace:1": workspaceDescriptor("workspace:1")
+    }
+    var surface = createTemporaryObject(surfaceFactory, this)
+    var row = sidebarRowInput(nav, surface, {rowKey: "window:row"})
+    // The badge is taller than its clipped container: only y 100..160 is real.
+    var viewport = createTemporaryObject(clipFactory, this, {
+      x: 10, y: 100, width: 200, height: 60
+    })
+    var badge = createTemporaryObject(rowInputFactory, viewport, {
+      x: 0, y: 0, width: 40, height: 120,
+      controller: rowController, navigationOwner: surface,
+      rowKey: "workspace:1", externalPriority: 10
+    })
+    verify(badge)
+
+    beginDrag()
+    // y=140 is inside the clipped-visible half of the badge.
+    mouseMove(this, 30, 140, 20, Qt.LeftButton)
+    tryCompare(badge.externalDragArea, "containsDrag", true, 1000)
+    compare(nav.pending.key, "workspace:1", "the visible badge half claims the visit")
+    compare(badge.externalDragArea.containsDrag, true)
+
+    // y=190 is inside the badge rectangle but clipped away, so only the row
+    // beneath claims it.
+    mouseMove(this, 30, 190, 20, Qt.LeftButton)
+    tryCompare(badge.externalDragArea, "containsDrag", false, 1000)
+    compare(row.externalDragArea.containsDrag, true)
+    compare(nav.pending.key, "window:row",
+      "the clipped-away badge rectangle falls through to its row")
+    mouseRelease(this, 30, 190, Qt.LeftButton)
+    nav.endSession()
+  }
+
+  Component {
+    id: clipFactory
+    Item { clip: true }
+  }
+
+  function test_scrolledOutRowIsNotEligible() {
+    rowController.reset()
+    var nav = makeNavigation()
+    rowController.externalDragNavigation = nav
+    rowController.targets = {"window:row": windowDescriptor("window:row")}
+    var surface = createTemporaryObject(surfaceFactory, this)
+    var viewport = createTemporaryObject(clipFactory, this, {
+      x: 10, y: 100, width: 200, height: 60
+    })
+    var input = createTemporaryObject(rowInputFactory, viewport, {
+      x: 0, y: 0, width: 200, height: 120,
+      controller: rowController, navigationOwner: surface, rowKey: "window:row"
+    })
+    verify(input)
+
+    beginDrag()
+    mouseMove(this, 60, 130, 20, Qt.LeftButton)
+    tryCompare(input.externalDragArea, "containsDrag", true, 1000)
+    compare(nav.pending.key, "window:row")
+
+    // Scroll the row out of the clipped viewport during the dwell.
+    input.y = -200
+    mouseMove(this, 60, 132, 20, Qt.LeftButton)
+    tryCompare(input.externalDragArea, "containsDrag", false, 1000)
+    compare(input.externalDragArea.token, 0)
+    verify(!nav.pendingActive, "a scrolled-out row cancels its dwell")
+    wait(80)
+    compare(actions.focusCount, 0)
+    mouseRelease(this, 60, 132, Qt.LeftButton)
+    nav.endSession()
   }
 }

@@ -495,6 +495,7 @@ PanelWindow {
         controller: root.controller
         appearance: root.sidebarAppearance
         panelConnector: String(root.screen && root.screen.name || "")
+        navigationOwner: root
         panelCollapsed: root.panelCollapsed
         presentationVisible: root.visible
         tabForwardTarget: sidebarWidgets.sectionVisible ? sidebarWidgets.manageControl : root.footerControl

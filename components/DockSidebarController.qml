@@ -28,6 +28,9 @@ Item {
   property string focusedWorkspace: ""
   property int scopeRevision: 0
   readonly property var windowActions: host ? host.windowActions || null : null
+  // Host-owned shared dwell coordinator; views attach their row adapters to it.
+  readonly property var externalDragNavigation: host
+    ? host.externalDragNavigation || null : null
   readonly property var herdrWindowAgents: host ? host.herdrWindowAgents || null : null
   readonly property var herdrAgentActions: host ? host.herdrAgentActions || null : null
   readonly property var windowIconOverrides: DockIconModel.normalizeWindowRules(
@@ -673,6 +676,108 @@ Item {
         && row.workspaceIdentity === target.workspaceIdentity
     }
     return row.desktopId === target.desktopId
+  }
+
+  // External drag hover builds a stable descriptor from the same captured target
+  // the click path uses. Keys identify the live entity (window address, canonical
+  // workspace identity, provider-verified tab, application group key), never a
+  // row index, so delegate recreation cannot retarget the visit. Launcher-only
+  // entries, Herdr agents, monitors, sections and controls are not targets.
+  function externalDragTarget(rowKey) {
+    var target = root.captureTarget(rowKey)
+    if (!target) return null
+    var kind = String(target.kind || "")
+    if (kind === "window") {
+      if (!target.address) return null
+      return {key:"window:" + target.address, kind:"window", toplevel:target.toplevel,
+        workspaceIdentity:target.workspaceIdentity, sidebarTarget:target}
+    }
+    if (kind === "workspace") {
+      if (!target.workspaceIdentity) return null
+      return {key:"workspace:" + target.workspaceIdentity, kind:"workspace",
+        workspaceIdentity:target.workspaceIdentity, sidebarTarget:target}
+    }
+    if (kind === "browser-tab") {
+      if (!target.targetId || !target.windowAddress) return null
+      return {key:"browser-tab:" + target.targetId + ":" + target.windowAddress,
+        kind:"browser-tab", toplevel:target.toplevel,
+        workspaceIdentity:target.workspaceIdentity, sidebarTarget:target}
+    }
+    if (kind === "application") {
+      var row = root.rowsByKey[target.key]
+      if (!row || row.expandable !== true) return null
+      return {key:"application:" + target.key, kind:"application",
+        workspaceIdentity:target.workspaceIdentity, sidebarTarget:target}
+    }
+    return null
+  }
+
+  // External hover never relocates. A workspace capture is re-resolved against
+  // the canonical identity and accepted at its current monitor; the captured
+  // monitor equality in targetIsCurrent stays in force for internal relocation.
+  function externalTargetIsCurrent(target) {
+    if (!target || !root.windowActions || !root.mappedScreens.length) return false
+    if (target.kind === "workspace") {
+      var destination = root.windowActions.resolveWorkspaceDropTarget(target.workspaceIdentity)
+      return !!destination && destination.identity === target.workspaceIdentity
+    }
+    return root.targetIsCurrent(target)
+  }
+
+  // Narrow external routing into the shared owners: focus in place for windows
+  // and tabs (restore-then-focus for minimized windows), identity focus for
+  // workspaces, and idempotent expansion for collapsed application groups.
+  // There is deliberately no modifier parameter: Ctrl copy/move negotiation
+  // during a content drag can never reach the relocation path.
+  function activateExternalDragTarget(target) {
+    if (!root.externalTargetIsCurrent(target)) return false
+    if (root.interactionBusy || root.resizeActive || root.rowDragActive) return false
+    var accepted = false
+    if (target.kind === "window") {
+      accepted = root.windowActions.focusToplevelInPlace(target.toplevel) === true
+    } else if (target.kind === "workspace") {
+      accepted = root.windowActions.focusWorkspaceInPlace(target.workspaceIdentity) === true
+    } else if (target.kind === "browser-tab") {
+      accepted = root.activateExternalBrowserTab(target)
+    } else if (target.kind === "application") {
+      accepted = root.expandApplicationForExternalDrag(target)
+    }
+    if (accepted) root.focusReturnTarget = null
+    return accepted
+  }
+
+  // Same provider validation as activateBrowserTab, but window activation goes
+  // through the focus-in-place entry point so a minimized browser is restored
+  // instead of pulled or re-assigned. Missing/stale/provider-busy targets fail
+  // closed; nothing is launched, muted or closed.
+  function activateExternalBrowserTab(target) {
+    var service = root.host ? root.host.browserProfileService : null
+    if (!service || !service.available
+        || typeof service.allTabRows !== "function"
+        || service.activationInFlight === true) return false
+    var targetId = String(target && target.targetId || "")
+    var address = String(target && target.windowAddress || "").toLowerCase()
+    var verified = service.allTabRows().some(function(row) {
+      return String(row.targetId || "") === targetId
+        && String(row.windowAddress || "").toLowerCase() === address
+    })
+    if (!verified || !target.toplevel) return false
+    if (!root.windowActions.focusToplevelInPlace(target.toplevel)) return false
+    return service.activateTarget(targetId) === true
+  }
+
+  // Session-local expansion only. It clears the fold flag once, schedules one
+  // refresh, and never persists, focuses or folds an already expanded group.
+  function expandApplicationForExternalDrag(target) {
+    var key = target && target.key ? String(target.key) : ""
+    var row = key ? root.rowsByKey[key] : null
+    if (!row || row.kind !== "application" || row.expandable !== true) return false
+    if (row.folded !== true) return true
+    var next = Object.assign({}, root.folds)
+    delete next[key]
+    root.folds = next
+    root.scheduleRefresh()
+    return true
   }
 
   // True when connector names a currently mapped sidebar panel output.

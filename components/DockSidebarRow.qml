@@ -22,6 +22,8 @@ Item {
   property var viewport: null
   property var appearance: null
   property string panelConnector: ""
+  // Owning PanelWindow for external-drag surface ownership.
+  property var navigationOwner: null
   // Presentation-only eligibility supplied by DockSidebarViewport. This keeps
   // cached/offscreen rows from running their local working-state timer.
   property bool herdrAnimationEligible: false
@@ -796,6 +798,10 @@ Item {
         controller: root.controller
         rowKey: root.leadingWorkspace ? root.leadingWorkspace.key : ""
         panelConnector: root.panelConnector
+        navigationOwner: root.navigationOwner
+        // The badge owns its own rectangle; child-target priority makes it win
+        // over the enclosing row regardless of drag-entry order.
+        externalPriority: 10
         workspaceHeader: true
         dragEnabled: true
         viewport: root.viewport
@@ -1489,6 +1495,7 @@ Item {
       controller: root.controller
       rowKey: root.rowKey
       panelConnector: root.panelConnector
+      navigationOwner: root.navigationOwner
       workspaceHeader: root.kind === "workspace"
       viewport: root.viewport
       enabled: root.navigable || root.herdrActionable

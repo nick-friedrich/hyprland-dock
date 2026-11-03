@@ -359,4 +359,471 @@ TestCase {
     tryCompare(hold, "held", false, 500)
     nav.endSession()
   }
+
+  // --- Sidebar integration: descriptors, revalidation and narrow routing -----
+
+  // Shared local probe: records the order of sidebar/window dispatches so tests
+  // can prove focus happens before provider tab activation.
+  QtObject {
+    id: probe
+    property var events: []
+    function reset() { events = [] }
+  }
+
+  QtObject {
+    id: sidebarActions
+    property var windows: []
+    property var workspaceOwners: ({})
+    property var focused: []
+    property var focusedWorkspaces: []
+    property int pullCount: 0
+    property int moveWorkspaceCount: 0
+    property int activateCount: 0
+    property int cycleCount: 0
+    function reset() {
+      windows = []
+      workspaceOwners = {}
+      focused = []
+      focusedWorkspaces = []
+      pullCount = 0
+      moveWorkspaceCount = 0
+      activateCount = 0
+      cycleCount = 0
+      probe.reset()
+    }
+    function entry(toplevel) {
+      for (var i = 0; i < windows.length; ++i) {
+        if (windows[i].toplevel === toplevel) return windows[i]
+      }
+      return null
+    }
+    function isAlive(toplevel) {
+      return !!toplevel && entry(toplevel) !== null
+    }
+    function addressFor(toplevel) {
+      var value = entry(toplevel)
+      return value ? value.address : ""
+    }
+    function resolveWorkspaceDropTarget(identity) {
+      var owner = workspaceOwners[String(identity || "")]
+      if (!owner) return null
+      return {identity: String(identity), target: String(identity).replace("id:", ""),
+        monitor: owner}
+    }
+    function focusToplevelInPlace(toplevel) {
+      if (!isAlive(toplevel)) return false
+      focused = focused.concat([toplevel])
+      probe.events = probe.events.concat(["focus"])
+      return true
+    }
+    function focusWorkspaceInPlace(identity) {
+      if (!resolveWorkspaceDropTarget(identity)) return false
+      focusedWorkspaces = focusedWorkspaces.concat([String(identity)])
+      probe.events = probe.events.concat(["workspace"])
+      return true
+    }
+    // Relocation/cycle entry points exist only so the tests can prove the
+    // external path never reaches them.
+    function activateToplevel() { activateCount++; return true }
+    function pullToplevelToMonitorWorkspace() { pullCount++; return true }
+    function moveWorkspaceToMonitor() { moveWorkspaceCount++; return true }
+    function cycleToplevels() { cycleCount++; return true }
+  }
+
+  QtObject {
+    id: sidebarBrowserService
+    property bool available: true
+    property int revision: 0
+    property var tabs: ({})
+    property bool activationInFlight: false
+    property var activations: []
+    function reset() {
+      available = true
+      revision = 0
+      tabs = ({})
+      activationInFlight = false
+      activations = []
+    }
+    function allTabRows() {
+      var rows = []
+      Object.keys(tabs || ({})).forEach(function(key) {
+        ;(tabs[key] || []).forEach(function(tab) {
+          rows.push({targetId: String(tab.targetId || ""),
+            windowAddress: String(key).toLowerCase()})
+        })
+      })
+      return rows
+    }
+    function activateTarget(targetId) {
+      if (!available || activationInFlight) return false
+      activations = activations.concat([String(targetId)])
+      probe.events = probe.events.concat(["activate"])
+      return true
+    }
+  }
+
+  Component {
+    id: sidebarFactory
+    DockSidebarController {}
+  }
+  Component {
+    id: sidebarToplevelFactory
+    QtObject {
+      property string appId: "app"
+      property string title: ""
+      property bool activated: false
+    }
+  }
+
+  function sidebarSettings() {
+    return {presentationMode: "sidebar", pinned: ["terminal"], workspaceGroups: [],
+      sidebarCollapsed: false, sidebarBrowserTabsEnabled: true,
+      sidebarInlineSoloWorkspace: true}
+  }
+
+  // Two populated workspaces on one monitor: a multi-window application group
+  // (inline badge on its header) and a sole window (inline badge on the window
+  // row, plus browser-tab children). A pinned launcher with no windows covers
+  // the excluded launcher kind.
+  function makeSidebarFixture() {
+    sidebarActions.reset()
+    sidebarBrowserService.reset()
+    var multiA = createTemporaryObject(sidebarToplevelFactory, this,
+      {appId: "aa-multi", title: "Multi A"})
+    var multiB = createTemporaryObject(sidebarToplevelFactory, this,
+      {appId: "aa-multi", title: "Multi B"})
+    var solo = createTemporaryObject(sidebarToplevelFactory, this,
+      {appId: "zz-solo", title: "Solo"})
+    verify(multiA && multiB && solo)
+    sidebarActions.windows = [
+      {toplevel: multiA, address: "0xa1"},
+      {toplevel: multiB, address: "0xa2"},
+      {toplevel: solo, address: "0x5b"}
+    ]
+    sidebarActions.workspaceOwners = {"id:1": "id:0", "id:2": "id:0"}
+    sidebarBrowserService.tabs = {"0x5b": [
+      {targetId: "tab-1", title: "Inbox", active: true, faviconPath: ""}
+    ]}
+    var controller = createTemporaryObject(sidebarFactory, this, {
+      settings: sidebarSettings(),
+      screens: [{name: "DP-1", width: 1920, height: 1080}],
+      monitors: [{id: 0, name: "DP-1", activeWorkspace: {id: 1}}],
+      workspaces: [{id: 1, monitorID: 0}, {id: 2, monitorID: 0}],
+      toplevels: [multiA, multiB, solo],
+      hyprToplevels: [
+        {wayland: multiA, address: "0xa1",
+          lastIpcObject: {workspace: {id: 1}, monitor: 0}},
+        {wayland: multiB, address: "0xa2",
+          lastIpcObject: {workspace: {id: 1}, monitor: 0}},
+        {wayland: solo, address: "0x5b",
+          lastIpcObject: {workspace: {id: 2}, monitor: 0}}
+      ],
+      host: {windowActions: sidebarActions,
+        browserProfileService: sidebarBrowserService}
+    })
+    verify(controller)
+    controller.refresh()
+    return {controller: controller, multiA: multiA, multiB: multiB, solo: solo}
+  }
+
+  function rowsOfKind(controller, kind) {
+    return (controller.projection.rows || []).filter(function(row) {
+      return row.kind === kind
+    })
+  }
+
+  function findRow(controller, predicate) {
+    var rows = controller.projection.rows || []
+    for (var i = 0; i < rows.length; ++i) {
+      if (predicate(rows[i])) return rows[i]
+    }
+    return null
+  }
+
+  function test_sidebarExternalDescriptorKinds() {
+    var fixture = makeSidebarFixture()
+    var controller = fixture.controller
+
+    var windowRow = rowsOfKind(controller, "window").filter(function(row) {
+      return row.toplevel === fixture.multiA
+    })[0]
+    verify(windowRow)
+    var windowTarget = controller.externalDragTarget(windowRow.key)
+    verify(windowTarget)
+    compare(windowTarget.kind, "window")
+    compare(windowTarget.key, "window:0xa1")
+    compare(windowTarget.toplevel, fixture.multiA)
+    compare(windowTarget.workspaceIdentity, "id:1")
+    compare(windowTarget.sidebarTarget.key, windowRow.key)
+
+    var workspaceTarget = controller.externalDragTarget(
+      controller.projection.workspaceTargets[0].key)
+    verify(workspaceTarget)
+    compare(workspaceTarget.kind, "workspace")
+    compare(workspaceTarget.key, "workspace:id:1")
+    compare(workspaceTarget.workspaceIdentity, "id:1")
+
+    var tabRow = rowsOfKind(controller, "browser-tab")[0]
+    verify(tabRow)
+    var tabTarget = controller.externalDragTarget(tabRow.key)
+    verify(tabTarget)
+    compare(tabTarget.kind, "browser-tab")
+    compare(tabTarget.key, "browser-tab:tab-1:0x5b")
+    compare(tabTarget.sidebarTarget.targetId, "tab-1")
+    compare(tabTarget.sidebarTarget.windowAddress, "0x5b")
+
+    // The leading inline badge resolves the workspace; its enclosing row keeps
+    // resolving its own window/application target.
+    var appRow = findRow(controller, function(row) {
+      return row.kind === "application" && !!row.leadingWorkspace
+    })
+    verify(appRow, "workspace 1 puts its inline badge on the application header")
+    var appTarget = controller.externalDragTarget(appRow.key)
+    compare(appTarget.kind, "application")
+    compare(appTarget.key, "application:" + appRow.key)
+    var appBadgeTarget = controller.externalDragTarget(appRow.leadingWorkspace.key)
+    compare(appBadgeTarget.kind, "workspace")
+    compare(appBadgeTarget.workspaceIdentity, "id:1")
+
+    var soloRow = findRow(controller, function(row) {
+      return row.kind === "window" && !!row.leadingWorkspace
+    })
+    verify(soloRow, "a sole window row carries the inline workspace badge")
+    compare(controller.externalDragTarget(soloRow.key).kind, "window")
+    compare(controller.externalDragTarget(soloRow.leadingWorkspace.key).workspaceIdentity,
+      "id:2")
+    controller.destroy()
+  }
+
+  function test_sidebarExternalApplicationExpansionAndExclusions() {
+    var fixture = makeSidebarFixture()
+    var controller = fixture.controller
+    var appRow = findRow(controller, function(row) {
+      return row.kind === "application" && row.expandable === true
+    })
+    verify(appRow)
+    var appTarget = controller.externalDragTarget(appRow.key)
+    verify(appTarget)
+
+    // Fold the group and let the projection settle; a collapsed group exposes
+    // only its header but stays an expansion target.
+    var folds = {}
+    folds[appRow.key] = true
+    controller.folds = folds
+    controller.refresh()
+    var foldedRow = controller.rowsByKey[appRow.key]
+    verify(foldedRow && foldedRow.folded === true)
+    compare(rowsOfKind(controller, "window").filter(function(row) {
+      return row.toplevel === fixture.multiA
+    }).length, 0, "collapsed application hides its members")
+    var foldedTarget = controller.externalDragTarget(appRow.key)
+    verify(foldedTarget)
+    compare(foldedTarget.kind, "application")
+
+    var writes = 0
+    controller.host = {windowActions: sidebarActions,
+      browserProfileService: sidebarBrowserService,
+      saveSetting: function() { writes++; return {ok: true, data: {applied: true}} }}
+    compare(controller.activateExternalDragTarget(foldedTarget.sidebarTarget), true)
+    compare(controller.folds[appRow.key], undefined, "expansion clears the fold flag once")
+    tryVerify(function() {
+      return controller.projection.rows.filter(function(row) {
+        return row.kind === "window" && row.toplevel === fixture.multiA
+      }).length === 1
+    }, 500)
+    compare(writes, 0, "expansion never writes configuration")
+    compare(sidebarActions.focused.length, 0, "expansion never focuses")
+    compare(sidebarActions.pullCount, 0)
+
+    // An already expanded group is never folded closed, and repeated dwells are
+    // idempotent.
+    var expandedTarget = controller.externalDragTarget(appRow.key)
+    compare(controller.activateExternalDragTarget(expandedTarget.sidebarTarget), true)
+    compare(controller.folds[appRow.key], undefined)
+    compare(controller.projection.rows.filter(function(row) {
+      return row.kind === "window" && row.toplevel === fixture.multiB
+    }).length, 1)
+    compare(writes, 0)
+
+    // Cancellation leaves the group expanded, matching manual expansion.
+    controller.cancelRowDrag("escape")
+    compare(controller.folds[appRow.key], undefined)
+    verify(rowsOfKind(controller, "window").length >= 2)
+
+    // Newly exposed window rows immediately resolve their own targets.
+    var exposed = rowsOfKind(controller, "window").filter(function(row) {
+      return row.toplevel === fixture.multiB
+    })[0]
+    compare(controller.externalDragTarget(exposed.key).kind, "window")
+
+    // Excluded kinds: monitors, launcher-only pins and unknown rows.
+    var monitorRow = rowsOfKind(controller, "monitor")[0]
+    compare(controller.externalDragTarget(monitorRow.key), null)
+    var launcherRow = (controller.projection.launchers || [])[0]
+    verify(launcherRow, "the pinned terminal without windows is a launcher row")
+    compare(controller.externalDragTarget(launcherRow.key), null)
+    compare(controller.externalDragTarget("window:missing"), null)
+    compare(controller.externalDragTarget(""), null)
+    controller.destroy()
+  }
+
+  function test_sidebarExternalWindowFocusInPlaceWithoutRelocation() {
+    var fixture = makeSidebarFixture()
+    var controller = fixture.controller
+    var windowRow = rowsOfKind(controller, "window").filter(function(row) {
+      return row.toplevel === fixture.solo
+    })[0]
+    var target = controller.externalDragTarget(windowRow.key)
+    verify(target)
+    probe.reset()
+    compare(controller.activateExternalDragTarget(target.sidebarTarget), true)
+    compare(sidebarActions.focused.length, 1)
+    compare(sidebarActions.focused[0], fixture.solo)
+    compare(probe.events.join(","), "focus")
+    compare(sidebarActions.pullCount, 0, "hover never pulls a window to another monitor")
+    compare(sidebarActions.activateCount, 0, "hover never routes through the click action")
+    compare(sidebarActions.cycleCount, 0)
+    compare(controller.interactionBusy, false,
+      "external hover keeps live inventory refreshing")
+    compare(controller.focusReturnTarget, null)
+
+    // A dead capture fails closed.
+    sidebarActions.windows = sidebarActions.windows.filter(function(entry) {
+      return entry.toplevel !== fixture.solo
+    })
+    compare(controller.activateExternalDragTarget(target.sidebarTarget), false)
+    compare(sidebarActions.focused.length, 1)
+    controller.destroy()
+  }
+
+  function test_sidebarExternalWorkspaceUsesCurrentMonitor() {
+    var fixture = makeSidebarFixture()
+    var controller = fixture.controller
+    var workspaceKey = controller.projection.workspaceTargets[0].key
+    var target = controller.externalDragTarget(workspaceKey)
+    verify(target)
+    // Reassign the workspace to the other monitor mid-dwell. The internal
+    // relocation predicate keeps rejecting the stale monitor; the external
+    // validator accepts the workspace where it lives now.
+    sidebarActions.workspaceOwners = {"id:1": "id:1", "id:2": "id:0"}
+    compare(controller.targetIsCurrent(target.sidebarTarget), false,
+      "captured-monitor equality still guards internal relocation")
+    compare(controller.externalTargetIsCurrent(target), true,
+      "external navigation accepts the workspace at its current monitor")
+    probe.reset()
+    compare(controller.activateExternalDragTarget(target.sidebarTarget), true)
+    compare(sidebarActions.focusedWorkspaces.length, 1)
+    compare(sidebarActions.focusedWorkspaces[0], "id:1")
+    compare(probe.events.join(","), "workspace")
+    compare(sidebarActions.moveWorkspaceCount, 0, "hover never relocates the workspace")
+    compare(sidebarActions.pullCount, 0)
+
+    // A workspace that disappears fails closed.
+    sidebarActions.workspaceOwners = {"id:2": "id:0"}
+    compare(controller.activateExternalDragTarget(target.sidebarTarget), false)
+    compare(sidebarActions.focusedWorkspaces.length, 1)
+    controller.destroy()
+  }
+
+  function test_sidebarExternalBrowserTabValidation() {
+    var fixture = makeSidebarFixture()
+    var controller = fixture.controller
+    var tabRow = rowsOfKind(controller, "browser-tab")[0]
+    var target = controller.externalDragTarget(tabRow.key)
+    verify(target)
+
+    sidebarBrowserService.available = false
+    compare(controller.activateExternalDragTarget(target.sidebarTarget), false,
+      "an unavailable provider fails closed")
+    sidebarBrowserService.available = true
+    sidebarBrowserService.activationInFlight = true
+    compare(controller.activateExternalDragTarget(target.sidebarTarget), false,
+      "a busy activation fails closed")
+    sidebarBrowserService.activationInFlight = false
+    sidebarBrowserService.tabs = ({})
+    compare(controller.activateExternalDragTarget(target.sidebarTarget), false,
+      "a tab that closed during the dwell is not activated")
+    sidebarBrowserService.tabs = {"0x5b": [
+      {targetId: "other-tab", title: "Other", active: true, faviconPath: ""}
+    ]}
+    compare(controller.activateExternalDragTarget(target.sidebarTarget), false,
+      "a tab replaced by another target is stale")
+    sidebarBrowserService.tabs = {"0x5b": [
+      {targetId: "tab-1", title: "Inbox", active: true, faviconPath: ""}
+    ]}
+    probe.reset()
+    compare(controller.activateExternalDragTarget(target.sidebarTarget), true)
+    compare(probe.events.join(","), "focus,activate",
+      "the owning window is focused in place before its verified tab activates")
+    compare(sidebarBrowserService.activations.length, 1)
+    compare(sidebarBrowserService.activations[0], "tab-1")
+    compare(sidebarActions.pullCount, 0)
+    compare(sidebarActions.activateCount, 0, "no mute/close/click path is used")
+    controller.destroy()
+  }
+
+  function test_sidebarExternalStaleCapturesFailClosed() {
+    var fixture = makeSidebarFixture()
+    var controller = fixture.controller
+    var windowRow = rowsOfKind(controller, "window").filter(function(row) {
+      return row.toplevel === fixture.multiB
+    })[0]
+    var target = controller.externalDragTarget(windowRow.key)
+    verify(target)
+
+    // Screen removal and presentation-mode change leave no mapped sidebar.
+    controller.screens = []
+    controller.refresh()
+    compare(controller.mappedScreens.length, 0)
+    compare(controller.activateExternalDragTarget(target.sidebarTarget), false)
+    compare(sidebarActions.focused.length, 0)
+
+    // Restore the surface and prove the same capture is still usable, then a
+    // recycled row identity (window gone) must not activate the new occupant.
+    controller.screens = [{name: "DP-1", width: 1920, height: 1080}]
+    controller.refresh()
+    compare(controller.externalTargetIsCurrent(target.sidebarTarget), true)
+    controller.toplevels = [fixture.multiA, fixture.solo]
+    controller.hyprToplevels = controller.hyprToplevels.filter(function(handle) {
+      return handle.wayland !== fixture.multiB
+    })
+    sidebarActions.windows = sidebarActions.windows.filter(function(entry) {
+      return entry.toplevel !== fixture.multiB
+    })
+    controller.refresh()
+    compare(controller.activateExternalDragTarget(target.sidebarTarget), false)
+    compare(sidebarActions.focused.length, 0)
+
+    // Workspace regrouping after activation keeps the identity valid; an
+    // unpopulated workspace target stays resolvable by canonical identity.
+    var workspaceTarget = controller.externalDragTarget(
+      controller.projection.workspaceTargets[0].key)
+    verify(workspaceTarget)
+    sidebarActions.workspaceOwners = {"id:1": "id:1", "id:2": "id:0"}
+    compare(controller.externalTargetIsCurrent(workspaceTarget.sidebarTarget), true)
+    controller.destroy()
+  }
+
+  function test_sidebarExternalCtrlNeverRoutesRelocation() {
+    var fixture = makeSidebarFixture()
+    var controller = fixture.controller
+    // The external entry point takes no modifier input, so a Ctrl-held content
+    // drag cannot reach the internal relocation routing at all. Every kind is
+    // dispatched with the modifier-carrying click API untouched.
+    var targets = []
+    var windowRow = rowsOfKind(controller, "window")[0]
+    targets.push(controller.externalDragTarget(windowRow.key))
+    targets.push(controller.externalDragTarget(controller.projection.workspaceTargets[0].key))
+    targets.push(controller.externalDragTarget(rowsOfKind(controller, "browser-tab")[0].key))
+    for (var i = 0; i < targets.length; ++i) {
+      verify(targets[i])
+      verify(controller.activateExternalDragTarget(targets[i].sidebarTarget) === true)
+    }
+    compare(sidebarActions.pullCount, 0, "no Ctrl relocation path from hover")
+    compare(sidebarActions.moveWorkspaceCount, 0)
+    compare(sidebarActions.activateCount, 0)
+    compare(controller.rowDragActive, false)
+    compare(controller.interactionBusy, false)
+    controller.destroy()
+  }
 }

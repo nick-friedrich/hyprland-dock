@@ -17,6 +17,9 @@ FocusScope {
   property var appearance: null
   // Connector of the owning PanelWindow; rows stamp this for Ctrl/drag.
   property string panelConnector: ""
+  // Owning PanelWindow used as the external-drag surface owner. PanelWindow is
+  // not a Qt Quick Item, hence the generic object type.
+  property var navigationOwner: null
   property bool panelCollapsed: false
   // Effective owning-panel visibility. Rail mode is separately excluded below.
   property bool presentationVisible: true
@@ -860,6 +863,7 @@ FocusScope {
       viewport: root
       appearance: root.appearance
       panelConnector: root.panelConnector
+      navigationOwner: root.navigationOwner
       collapsed: root.panelCollapsed
       rowHeight: root.rowHeight
       herdrAnimationEligible: root.rowIntersectsViewport(y, height)
