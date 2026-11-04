@@ -74,6 +74,25 @@ Item {
     ? browserProfileService.profileFor(browserProfileKey) : null
   property bool presentationActive: true
   property bool originOnly: false
+  // External content-drag hover. Dock.qml injects the host coordinator, this
+  // dock surface as the owner, and the workspace identity this icon represents
+  // (the owning card in grouped layout, the item's own workspace in flat
+  // layout). The icon only describes its destination; the shared owners focus.
+  property var navigation: null
+  property QtObject navigationOwner: null
+  property string localWorkspaceIdentity: ""
+  property var externalTarget: null
+  readonly property var externalDragArea: iconDragArea
+  readonly property string representedWorkspaceIdentity: {
+    var card = String(root.workspaceActivationTarget || "")
+    return card !== "" ? card : String(root.localWorkspaceIdentity || "")
+  }
+  readonly property bool externalEligible: !!root.navigation
+    && root.presentationActive && root.presentationVisible
+    && !root.workspaceInputSuppressed
+    && !(root.contextMenu && root.contextMenu.visible)
+    && root.runningCount > 0
+
   property bool localUrgent: false
   property bool sticky: false
   property string attentionScopeKey: ""
@@ -107,6 +126,41 @@ Item {
   function dismissPopups() {
     contextMenu.closeAll()
     previewReleased(root)
+  }
+
+  // Hover resolution for a content drag. One live window activates that exact
+  // toplevel; several windows open the existing preview after the dwell (the
+  // preview owns exact tile selection); with previews disabled the icon reveals
+  // the workspace it represents and never picks a window from focus history.
+  function externalDragTarget() {
+    if (!root.externalEligible) return null
+    if (root.runningCount === 1) {
+      var toplevel = root.runningToplevels[0]
+      var address = root.windowActions
+        ? String(root.windowActions.addressFor(toplevel) || "") : ""
+      if (!address) return null
+      return {key: "window:" + address, kind: "window", toplevel: toplevel,
+        anchor: root, priority: 0}
+    }
+    if (root.showPreviews) {
+      var presentation = String(root.presentationId || "")
+      if (!presentation) return null
+      return {key: "preview:" + presentation, kind: "preview",
+        anchor: root, priority: 0}
+    }
+    var workspace = root.representedWorkspaceIdentity
+    if (!workspace) return null
+    return {key: "workspace:" + workspace, kind: "workspace",
+      workspaceIdentity: workspace, anchor: root, priority: 0}
+  }
+
+  // A held token keeps its captured descriptor: focus/provider/workspace
+  // revalidation at activation decides whether it is still valid, so unrelated
+  // inventory refreshes cannot restart the dwell. A fresh drag entry forces a
+  // recapture so a row exposed since the last visit is immediately eligible.
+  function refreshExternalTarget(force) {
+    if (force !== true && iconDragArea.token !== 0) return
+    root.externalTarget = root.externalDragTarget()
   }
 
   function cancelWorkspaceDrag(reason) {
@@ -143,7 +197,10 @@ Item {
     tooltip.scheduleReanchor()
     contextMenu.updatePopupAnchors()
   }
-  onPresentationVisibleChanged: if (!presentationVisible) dismissPopups()
+  onPresentationVisibleChanged: {
+    if (!presentationVisible) dismissPopups()
+    root.refreshExternalTarget(false)
+  }
   property int scopeRevision: 0
   property bool menuOpen: false
   function syncMenuOpen() {
@@ -321,7 +378,13 @@ Item {
     lastWheelTimestamp = 0
     if (!root.hasPreviewContent())
       root.previewDismissRequested()
+    root.refreshExternalTarget(false)
   }
+
+  onShowPreviewsChanged: root.refreshExternalTarget(false)
+  onExternalEligibleChanged: root.refreshExternalTarget(false)
+  onWorkspaceActivationTargetChanged: root.refreshExternalTarget(false)
+  onLocalWorkspaceIdentityChanged: root.refreshExternalTarget(false)
 
   onPresentationActiveChanged: {
     if (!presentationActive) {
@@ -374,6 +437,7 @@ Item {
     seenHerdrBlockedTransitionRevision = herdrBlockedTransitionRevision
     motionReady = true
     requestUrgentMotion(false)
+    root.refreshExternalTarget(false)
   }
   onAttentionActiveChanged: {
     if (attentionActive) {
@@ -718,6 +782,24 @@ Item {
 
   Accessible.role: Accessible.Button
   Accessible.name: accessibleLabel()
+
+  // Nonvisual native drag region over the icon slot. It is deliberately outside
+  // the tap/drag handlers: hovering never opens a menu, launches, or clicks.
+  DockExternalDragArea {
+    id: iconDragArea
+
+    anchors.fill: parent
+    navigation: root.navigation
+    owner: root.navigationOwner
+    targetDescriptor: root.externalTarget
+    navigationEnabled: root.externalEligible
+  }
+  Connections {
+    target: iconDragArea
+    function onContainsDragChanged() {
+      if (iconDragArea.containsDrag) root.refreshExternalTarget(true)
+    }
+  }
 
   HoverHandler {
     id: mouse

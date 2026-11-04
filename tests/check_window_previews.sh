@@ -52,7 +52,22 @@ require_pattern 'serverLabel:[[:space:]]*root\.herdrServerLabel\(agent\.serverId
 require_pattern 'herdrAgentActions:[[:space:]]*root\.herdrAgentActions' DockHost.qml
 require_pattern 'herdrAgentActions:[[:space:]]*root\.herdrAgentActions' components/Dock.qml
 require_pattern 'root\.anchorItem\["previewAgents"\]' components/DockWindowPreview.qml
-require_pattern 'root\.members\.length[[:space:]]*>=[[:space:]]*2[[:space:]]*&&[[:space:]]*!root\.herdrOnly' components/DockWindowPreview.qml
+require_pattern 'root\.members\.length[[:space:]]*>=[[:space:]]*2[[:space:]]*&&[[:space:]]*\(!root\.herdrOnly[[:space:]]*\|\|[[:space:]]*root\.dragSession\)' components/DockWindowPreview.qml
+
+# External content-drag hover reuses the one popup: the dwell opens it without
+# the ordinary 220 ms delay, exact tiles stay exposed for the drag session, and
+# dismissal follows drag membership plus the coordinator handoff.
+require_pattern 'function requestDragPreview\(' components/DockWindowPreview.qml
+require_pattern 'root\.openDelayMs' components/DockWindowPreview.qml
+require_pattern 'handoffMs' components/DockWindowPreview.qml
+require_pattern 'DockExternalDragArea[[:space:]]*\{' components/DockWindowPreview.qml
+require_pattern 'DockExternalDragArea[[:space:]]*\{' components/DockWindowPreviewTile.qml
+require_pattern 'anchors\.rightMargin: closeButton\.width \+ 10' components/DockWindowPreviewTile.qml
+require_pattern 'function requestExternalPreview\(' components/Dock.qml
+require_pattern 'windowPreview\.requestDragPreview\(' components/Dock.qml
+require_pattern 'kind: "preview"' components/DockItem.qml
+require_pattern 'kind: "workspace"' components/DockItem.qml
+require_pattern 'representedWorkspaceIdentity' components/DockItem.qml
 require_pattern 'root\.herdrAgentActions\.captureAgentTarget\(agent\.toplevel, agent\)' components/DockWindowPreview.qml
 require_pattern 'root\.herdrAgentActions\.activateHerdrTarget\(target\)' components/DockWindowPreview.qml
 require_pattern 'modelData\.focusAgentSupported[[:space:]]*===[[:space:]]*true' components/DockWindowPreview.qml

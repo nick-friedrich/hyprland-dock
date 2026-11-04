@@ -401,6 +401,114 @@ TestCase {
     Item { clip: true }
   }
 
+  Component {
+    id: holdFactory
+    QtObject {
+      property var navigation: null
+      property var targetOwner: null
+      property bool held: navigation ? navigation.heldFor(targetOwner) : false
+    }
+  }
+
+  function test_passiveSurfaceHoldNeverCancelsItsEnclosedTarget() {
+    var nav = makeNavigation()
+    var dockSurface = createTemporaryObject(surfaceFactory, this)
+    // The whole-dock hold covers the icon, exactly like Dock.qml's interactionArea.
+    var surface = createTemporaryObject(areaFactory, this, {
+      x: 10, y: 10, width: 300, height: 160,
+      navigation: nav, owner: dockSurface,
+      targetDescriptor: {key: "reveal:surface:DP-1", kind: "reveal", passive: true}
+    })
+    var icon = createTemporaryObject(areaFactory, this, {
+      x: 40, y: 60, width: 56, height: 56,
+      navigation: nav, owner: dockSurface,
+      targetDescriptor: {key: "window:0x30", kind: "window"}
+    })
+    surface.begin()
+    icon.begin()
+    compare(nav.pending.key, "window:0x30", "the icon arms its dwell inside the hold")
+    // A late surface position event must not cancel the enclosed target.
+    surface.begin()
+    compare(nav.pending.key, "window:0x30")
+    nav.cancelOwner(dockSurface)
+    compare(nav.pending, null)
+    verify(!nav.heldFor(dockSurface))
+    nav.endSession()
+  }
+
+  function test_dockHoldSurvivesLeavingTheIconForTheSurface() {
+    var nav = makeNavigation()
+    var dockSurface = createTemporaryObject(surfaceFactory, this)
+    var hold = createTemporaryObject(holdFactory, this, {
+      navigation: nav, targetOwner: dockSurface
+    })
+    var surface = createTemporaryObject(areaFactory, this, {
+      x: 10, y: 10, width: 300, height: 160,
+      navigation: nav, owner: dockSurface,
+      targetDescriptor: {key: "reveal:surface:DP-1", kind: "reveal", passive: true}
+    })
+    var icon = createTemporaryObject(areaFactory, this, {
+      x: 40, y: 60, width: 56, height: 56,
+      navigation: nav, owner: dockSurface,
+      targetDescriptor: {key: "window:0x31", kind: "window"}
+    })
+    var surfaceToken = surface.begin()
+    var iconToken = icon.begin()
+    verify(hold.held)
+    // The drag leaves the icon but stays on the dock body.
+    icon.release(true)
+    verify(hold.held, "the enclosing dock hold keeps the surface reachable")
+    verify(!nav.pendingActive, "leaving the icon cancels its dwell")
+    // Leaving the dock body releases after the handoff grace.
+    surface.release(true)
+    tryCompare(hold, "held", false, 500)
+    verify(surfaceToken !== 0 && iconToken !== 0)
+    nav.endSession()
+  }
+
+  function test_previewTileIsAnExactWindowTarget() {
+    var nav = makeNavigation()
+    var dockSurface = createTemporaryObject(surfaceFactory, this)
+    var toplevel = createTemporaryObject(toplevelFactory, this)
+    actions.alive = [toplevel]
+    // The popup body holds the dock open; each tile addresses one window.
+    var popup = createTemporaryObject(areaFactory, this, {
+      x: 10, y: 10, width: 300, height: 200,
+      navigation: nav, owner: dockSurface,
+      targetDescriptor: {key: "reveal:preview", kind: "reveal", passive: true}
+    })
+    var tile = createTemporaryObject(areaFactory, this, {
+      x: 20, y: 20, width: 232, height: 176,
+      navigation: nav, owner: dockSurface,
+      targetDescriptor: {key: "window:0x40", kind: "window", toplevel: toplevel}
+    })
+    popup.begin()
+    tile.begin()
+    compare(nav.pending.key, "window:0x40")
+    compare(nav.pending.target.toplevel, toplevel,
+      "the exact tile window is the captured destination")
+    nav.cancelOwner(dockSurface)
+    nav.endSession()
+  }
+
+  function test_releaseOnRevealHoldRejectsTheDrop() {
+    var nav = makeNavigation()
+    var dockSurface = createTemporaryObject(surfaceFactory, this)
+    var surface = createTemporaryObject(areaFactory, this, {
+      x: 10, y: 10, width: 300, height: 160,
+      navigation: nav, owner: dockSurface,
+      targetDescriptor: {key: "reveal:strip:DP-1", kind: "reveal", passive: true}
+    })
+    surface.begin()
+    verify(nav.heldFor(dockSurface))
+    var event = {accepted: true}
+    verify(surface.handleDrop(event))
+    compare(event.accepted, false, "releasing on the dock never accepts the content")
+    compare(nav.sessionActive, false)
+    verify(!nav.heldFor(dockSurface))
+    nav.endSession()
+  }
+
   function test_scrolledOutRowIsNotEligible() {
     rowController.reset()
     var nav = makeNavigation()

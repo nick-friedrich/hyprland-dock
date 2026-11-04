@@ -100,6 +100,24 @@ PanelWindow {
       workspaceMonitorVirtualRect(item, offsetX, offsetY), monitorRect)
   }
 
+  // The coordinator dwelled on one of this dock's multiwindow icons. Re-resolve
+  // the anchor against the current keyed presentation before opening: a
+  // retained removal slot, a re-grouped card or a stale key must never receive
+  // the popup, and the ordinary 220 ms hover delay is not applied again.
+  function requestExternalPreview(owner, key, anchor) {
+    if (owner !== root || !anchor || !root.showPreviews) return false
+    var presentationId = String(anchor.presentationId || "")
+    if (!presentationId || String(key || "") !== "preview:" + presentationId)
+      return false
+    var target = PreviewModel.visiblePreviewTarget(root.renderedItems,
+      presentationId, anchor.identityToplevel || null)
+    if (!target || String(target.presentationId || "") !== presentationId
+        || (target.identityToplevel || null) !== (anchor.identityToplevel || null))
+      return false
+    return windowPreview.requestDragPreview(anchor, anchor.desktopId,
+      anchor.runningToplevels, anchor.entry)
+  }
+
   function cardForWorkspace(identity) {
     var wanted = String(identity || "")
     if (!wanted || !workspaceCards) return null
@@ -629,10 +647,17 @@ PanelWindow {
       compactMainExtent - groupedSurfaceTrim + groupedSurfaceGutter * 2) <= screen.width)
   readonly property int compactPanelExtent: compactGroupedSurface
     ? compactMainExtent - groupedSurfaceTrim + groupedSurfaceGutter * 2 : compactMainExtent
+  // Host-owned shared external content-drag coordinator. Hover only holds this
+  // surface open; every activation stays in the shared window/sidebar owners.
+  readonly property var externalDragNavigation: root.host
+    ? root.host.externalDragNavigation || null : null
+  readonly property bool externalDragHeld: root.externalDragNavigation
+    ? root.externalDragNavigation.heldFor(root) : false
   readonly property bool keepAutoHideOpen: windowPointer.hovered
     || appPicker.visible || openMenuCount > 0
     || dragSource >= 0 || windowPreview.interactionActive || workspaceDragActive
     || workspaceMonitorDragSourceActive || positionDragSurface.pressed || dragRevealed
+    || root.externalDragHeld === true
   readonly property bool dockShown: !autoHide || autoHideRevealed || dragRevealed
   readonly property real pointerPosition: !pointer.hovered
     ? -10000
@@ -1049,6 +1074,8 @@ PanelWindow {
   onHyprWorkspacesChanged: root.scheduleVisibleItemsRefresh()
   Component.onDestruction: {
     root.cancelWorkspaceGesture("surface destroyed")
+    if (root.externalDragNavigation)
+      root.externalDragNavigation.cancelOwner(root)
     if (workspaceMonitorDrag) workspaceMonitorDrag.unregisterDock(root)
     if (badgeTracker && screen) badgeTracker.syncWorkspaceScopes(screen.name, [])
   }
@@ -1226,6 +1253,23 @@ PanelWindow {
       ? Math.min(parent.width, root.compactPanelExtent) : parent.width
     height: parent.height
     x: (parent.width - width) / 2
+
+    // Whole-dock visibility hold for a content drag. It is passive: it only
+    // keeps the surface reachable while the pointer is on any dock pixel, and
+    // it never cancels the more specific icon/header target it encloses.
+    DockExternalDragArea {
+      id: dockSurfaceDrag
+
+      anchors.fill: parent
+      navigation: root.externalDragNavigation
+      owner: root
+      navigationEnabled: !!root.externalDragNavigation
+      targetDescriptor: ({
+        key: "reveal:surface:" + String(root.screen && root.screen.name || ""),
+        kind: "reveal",
+        passive: true
+      })
+    }
   }
 
   Item {
@@ -1236,6 +1280,30 @@ PanelWindow {
     y: root.position === "bottom" ? parent.height - height : 0
     width: root.vertical ? root.revealThickness : interactionArea.width
     height: root.vertical ? parent.height : root.revealThickness
+
+    // The existing hidden-dock hit strip is the reveal trigger. It only holds
+    // visibility: entering it never arms or cancels an activation.
+    DockExternalDragArea {
+      id: revealStripDrag
+
+      anchors.fill: parent
+      navigation: root.externalDragNavigation
+      owner: root
+      navigationEnabled: !!root.externalDragNavigation
+      targetDescriptor: ({
+        key: "reveal:strip:" + String(root.screen && root.screen.name || ""),
+        kind: "reveal",
+        passive: true
+      })
+    }
+  }
+
+  Connections {
+    target: root.externalDragNavigation
+    ignoreUnknownSignals: true
+    function onPreviewRequested(owner, key, anchor) {
+      root.requestExternalPreview(owner, key, anchor)
+    }
   }
 
   BorderSurface {
@@ -1555,6 +1623,8 @@ PanelWindow {
                 label: modelData.label
                 workspaceIdentity: modelData.identity
                 workspaceOwnerMonitor: String(modelData.monitorIdentity || "")
+                navigation: root.externalDragNavigation
+                navigationOwner: root
                 workspaceMonitorDrag: root.workspaceMonitorDrag
                 workspaceMonitorDragDock: root
                 switchable: !modelData._monitorDragPlaceholder
@@ -1645,6 +1715,8 @@ PanelWindow {
           label: "Other windows"
           position: root.position
           viewport: groupedLayout
+          navigation: root.externalDragNavigation
+          navigationOwner: root
           windowDragActive: root.workspaceDragActive
           count: root.workspacePresentation.fallbackItems.reduce(function(total, item) {
             return total + item.toplevels.length
@@ -1741,6 +1813,8 @@ PanelWindow {
         iconSize: root.iconSize
         position: root.position
         animationsEnabled: root.interfaceAnimationsEnabled
+        navigation: root.externalDragNavigation
+        navigationOwner: root
         onWorkspaceRequested: (workspaceId, pullToMonitor) => {
           if (pullToMonitor === true)
             root.focusWorkspaceOnDockMonitor(workspaceId)
@@ -1769,6 +1843,9 @@ PanelWindow {
     activationMonitor: DockWindowModel.monitorIdentity(root.dockHyprMonitor)
 
     desktopId: modelData.desktopId
+    navigation: root.externalDragNavigation
+    navigationOwner: root
+    localWorkspaceIdentity: String(modelData.localWorkspaceIdentity || "")
     iconOverrides: root.iconOverrides
     windowOverrideSource: String(modelData.windowOverrideSource || "")
     iconReloadRevision: root.iconReloadRevision
@@ -1874,6 +1951,8 @@ PanelWindow {
     id: windowPreview
 
     windowActions: root.windowActions
+    navigation: root.externalDragNavigation
+    navigationOwner: root
     herdrAgentActions: root.herdrAgentActions
     activationMonitor: DockWindowModel.monitorIdentity(root.dockHyprMonitor)
     position: root.position

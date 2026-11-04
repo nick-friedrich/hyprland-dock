@@ -345,6 +345,60 @@ TestCase {
     nav.endSession()
   }
 
+  function test_previewRequestIsOwnerScopedAndLatched() {
+    resetActions()
+    var nav = makeNavigation({dwellMs: 20, handoffMs: 40})
+    var firstDock = makeOwner()
+    var secondDock = makeOwner()
+    var anchor = createTemporaryObject(ownerFactory, this)
+    var requests = []
+    nav.previewRequested.connect(function(requestOwner, key, requestAnchor) {
+      // A dock surface handles only its own owner and current anchor.
+      if (requestOwner !== firstDock) return
+      requests.push({owner: requestOwner, key: key, anchor: requestAnchor})
+    })
+
+    var token = nav.enter(firstDock, {key: "preview:group", kind: "preview", anchor: anchor})
+    tryCompare(nav, "firedKey", "preview:group", 500)
+    compare(requests.length, 1)
+    compare(requests[0].owner, firstDock)
+    compare(requests[0].anchor, anchor, "the icon anchor reaches the dock handler")
+
+    // Delegate reprojection after the popup opened must not open it again.
+    nav.leave(token, false)
+    nav.enter(firstDock, {key: "preview:group", kind: "preview", anchor: anchor})
+    wait(90)
+    compare(requests.length, 1, "one drag session requests the popup once")
+
+    // A different dock's descriptor is independent of this latch.
+    nav.enter(secondDock, {key: "preview:group", kind: "preview", anchor: anchor})
+    wait(90)
+    compare(requests.length, 1, "the other dock's request is not handled here")
+    compare(nav.firedKey, "preview:group")
+
+    // A genuinely new drag session may request the popup again.
+    nav.endSession()
+    nav.enter(firstDock, {key: "preview:group", kind: "preview", anchor: anchor})
+    tryCompare(nav, "firedKey", "preview:group", 500)
+    wait(60)
+    compare(requests.length, 2)
+    nav.endSession()
+  }
+
+  function test_previewLeavingTargetCancelsActivationImmediately() {
+    resetActions()
+    var nav = makeNavigation({dwellMs: 80, handoffMs: 40})
+    var owner = makeOwner()
+    var requests = 0
+    nav.previewRequested.connect(function() { requests++ })
+    var token = nav.enter(owner, {key: "preview:group", kind: "preview", anchor: null})
+    wait(20)
+    verify(nav.leave(token, true))
+    wait(120)
+    compare(requests, 0, "exiting before the dwell never opens the preview")
+    verify(!nav.pendingActive)
+  }
+
   function test_revealOnlyHolds() {
     resetActions()
     var nav = makeNavigation({dwellMs: 20, handoffMs: 40})

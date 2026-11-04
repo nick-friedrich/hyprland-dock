@@ -33,6 +33,21 @@ Item {
   property string position: "bottom"
   property bool presentationVisible: true
   property bool animationsEnabled: true
+  // External content-drag hover: the card header is a workspace-only target.
+  // The owning card identity is authoritative; the icons inside keep their own
+  // window/preview targets.
+  property var navigation: null
+  property QtObject navigationOwner: null
+  readonly property bool externalEligible: !!root.navigation && root.switchable
+    && root.presentationVisible && root.workspaceIdentity !== ""
+    && !root.headerInputSuppressed
+  readonly property var externalTarget: root.externalDragTarget()
+
+  function externalDragTarget() {
+    if (!root.externalEligible) return null
+    return {key: "workspace:" + root.workspaceIdentity, kind: "workspace",
+      workspaceIdentity: root.workspaceIdentity, anchor: root, priority: 0}
+  }
   property var applicationModel: null
   property Component applicationDelegate: null
   property DockWorkspaceLayout viewport: null
@@ -143,6 +158,16 @@ Item {
     Accessible.role: Accessible.Button
     Accessible.name: root.label + ", " + root.count + " windows" + (root.urgent ? ", urgent" : "")
     Accessible.onPressAction: if (root.switchable && !root.headerInputSuppressed) root.activated(false)
+
+    DockExternalDragArea {
+      id: headerDragArea
+
+      anchors.fill: parent
+      navigation: root.navigation
+      owner: root.navigationOwner
+      targetDescriptor: root.externalTarget
+      navigationEnabled: root.externalEligible
+    }
     activeFocusOnTab: root.switchable && !root.headerInputSuppressed
     Keys.onReturnPressed: if (root.switchable && !root.headerInputSuppressed) root.activated(false)
     Keys.onSpacePressed: if (root.switchable && !root.headerInputSuppressed) root.activated(false)
