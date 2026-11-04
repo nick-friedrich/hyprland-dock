@@ -1,13 +1,11 @@
 # External drag hover navigation — real-app runtime matrix (Task 1 feasibility gate)
 
-Status: **NOT EXECUTED — staging only, handed off.** This file records the
-native Wayland drag route gate from
-`docs/superpowers/plans/2026-11-03-external-drag-hover-navigation.md` (Task 1).
-No case was performed, so no case is PASS or FAIL and no feature code is
-qualified by this document. The KVM route was halted by the owner and the gate
-moved to a real desktop machine; see "Handoff" below for what the next agent
-inherits. The staging, instrumentation contract, case matrix and evidence format
-are retained because they are directly reusable on a real desktop.
+Status: **EXECUTED ON THE REAL DESKTOP — GO for the sidebar window and workspace
+route.** The gate ran on the owner's live Omarchy desktop against
+`feat/edhn-surfaces @ 4c2909f` with the real compositor, real applications and a
+real Wayland DnD transfer. Cases A, B/C, D and E passed; G was not measured, H
+showed no pointer warp, and I was not executed; classic-dock and multiwindow
+preview cases remain unqualified because Task 4 is not implemented.
 
 ## Scope
 
@@ -24,19 +22,18 @@ destination application receives the dragged content.
 | Item | Value |
 | --- | --- |
 | Base commit (branch point) | `ff7d452284c1bd065fdb0d344a98eb3c864bc9ef` (origin/main) |
-| Branch | `feat/edhn-gate-t1` |
+| Branch | `feat/edhn-surfaces` |
+| Executed head | `4c2909fbc2047594aac39bfe7339dd056da45ee7` |
 | Host Hyprland | `0.56.2-4` (built from v0.56.2, commit `efb5099`) |
-| Host Quickshell | `0.3.2.r7.g2b4501a-1` |
+| Host Quickshell | `0.3.2` (rev `2b4501a`, Omarchy) |
 | Host Qt Wayland | `6.12.0-1` |
-| Guest Hyprland | `0.57.0-3` (built from v0.57.0, commit `0aa6745`) |
-| Guest Quickshell | `0.3.2-1` |
-| Guest Qt Wayland | `6.12.0-1` |
-| Guest apps | thunar `4.20.10-1`, foot `1.28.0-2`, grim `1.5.0-2` |
-| Guest session | `edhn-t1-j`, standalone, two virtio outputs (`Virtual-1` 1900x907, `Virtual-2` 1900x968) |
+| File manager | GNOME nautilus `51.1` (source and destination) |
+| Displays | DP-1 1920x1080 (classic dock) and HDMI-A-1 1920x1080 (sidebar) |
+| Input path | `ydotool` uinput virtual mouse + `hyprctl` cursor warps |
 
-The guest is a named KVM dev session (`docs/DEV_SESSIONS.md`), not the host
-desktop. No host dock, host settings file, or installed Omarchy plugin was
-touched.
+The earlier KVM guest attempt (`edhn-t1-j`, Hyprland 0.57.0, thunar 4.20.10)
+staged identical instrumentation but performed no case; it is kept below only as
+the staging that preceded this run.
 
 ## Instrumentation (temporary, removed before delivery)
 
@@ -79,27 +76,32 @@ source).
 - The guest `qs list` build prints Qt locale warnings and `No running
   instances.` on stdout, so dock readiness matches the candidate config path in
   the plain `qs list --all` output instead of parsing `--json`.
-- The drags were performed by the desktop owner with the real pointer. No
-  synthetic input, clipboard transfer, or synthetic mouse release was used.
+- The intended guest run above never performed a case; the executed run used the
+  owner's live desktop, so those guest deviations describe staging only.
+- The executed run's drags were driven by a `ydotool` uinput virtual mouse, not
+  a human hand and not the desktop owner's own pointer. See "Input method"
+  under Results for exactly what that does and does not substitute for.
 - Guest dock settings differ from host settings only inside the guest:
   `workspaceLayout: grouped`, `iconSize: 56`, `autoHide: false`,
   `showPreviews: true`. Theme files (`colors.toml`, `shell.toml`) were copied
   into the guest so Omarchy `Color`/`Style` resolve.
 
-## Guest layout
+## Desktop layout used
 
-- Workspace 1 on `Virtual-1`: two thunar windows, tiled — **src**
-  (`~/edhn-t1/src`, holds `payload-a.txt`, `payload-b.txt`, `payload-shot.png`)
-  and **dst-same** (`~/edhn-t1/dst-same`, empty).
-- Workspace 3 (hidden until activated): **dst-cross** (`~/edhn-t1/dst-cross`,
-  empty).
-- Dock (both outputs): workspace-1 card with two thunar icons, workspace-3 card
-  with one thunar icon, plus an empty-workspace card.
+- HDMI-A-1, workspace 11: two nautilus windows tiled — **src**
+  (`/var/tmp/edhn-live/src`) and, for the first case, **dst**
+  (`/var/tmp/edhn-live/dst`).
+- Workspace 99 (`Work`) on HDMI-A-1: **dst** moved there for the cross-workspace
+  case.
+- Sidebar on HDMI-A-1 showed the workspace 11 group (T3 Code, ComfyUI, `src`)
+  and the workspace 99 group whose inline badge was the cross-workspace target.
+- DP-1 kept its classic dock and the T3 Code window untouched.
 
 ## Matrix
 
-The owner performs each case with the real pointer; the gate reads the
-navigation log and the destination state afterwards. "Dwell" is 500 ms.
+Each case is performed with the pointer over the real dock; the result is read
+from the destination directory and the compositor state afterwards, never from a
+log line alone. "Dwell" is 500 ms.
 
 | # | Case | Source | Target hovered | Release | Pass criteria |
 | --- | --- | --- | --- | --- | --- |
@@ -115,54 +117,99 @@ navigation log and the destination state afterwards. "Dwell" is 500 ms.
 
 ## Results
 
-No case was performed. Every row in the matrix is **NOT EXECUTED**.
+Executed 2026-11-04 on the owner's live desktop, not in a guest. Source
+`feat/edhn-surfaces @ 4c2909f` selected with `dockrail dev use`, sidebar
+presentation on the HDMI-A-1 output, classic presentation untouched on DP-1.
+Settings: defaults (`dragHoverNavigationEnabled: true`,
+`dragHoverDelayMs: 500`). Desktop restored with `dockrail dev reset` afterwards.
 
-| # | Result | Reason |
+| # | Result | Evidence |
 | --- | --- | --- |
-| A–F | NOT EXECUTED | Owner halted the KVM route before performing them |
-| G–H | NOT EXECUTED | Observations belong to the same run |
-| I | NOT EXECUTED | No browser in the guest image; needs re-provisioning |
+| A | **PASS** | `payload-b.txt` dragged from the **src** nautilus window onto the **dst** sidebar window row. The row activated `dst` during the drag; the file was released inside `dst` and appeared there exactly once; `src` no longer held it. |
+| B/C | **PASS** | `payload-a.txt` dragged from **src** onto the inline workspace badge of the workspace 99 group. HDMI-A-1 switched from workspace 11 to workspace 99 **while the drag was still held**; the file was released inside `dst` on that workspace and appeared exactly once. |
+| D | **PASS** | A fresh file dragged onto a sidebar target and released **on** the dock. `drop.accepted = false`: the source kept the file, nothing was copied or moved anywhere, and subsequent input worked normally (no stuck grab). |
+| E | **PASS** | Escape pressed while hovering a sidebar target with the button held: the drag ended, the source kept the file, nothing was transferred. |
+| G | NOT MEASURED | Cursor shape was not captured reliably at the moment of target entry. |
+| H | **PASS (no warp)** | On activation the pointer stayed where it was placed; only focus and the workspace changed. No pointer jump was observed in any case. |
+| I | NOT EXECUTED | No browser image/link drag was attempted in this run. |
+| — | NOT EXECUTED | Multiwindow icon → window-preview → exact-tile selection, and every classic-dock target: Task 4 is not implemented, so those targets do not exist yet in the candidate. |
 
-Nothing here is evidence that a real external drag survives activation, and
-nothing here is evidence that it does not. The gate remains open.
+### What this proves and what it does not
+
+Proven: a real external file drag survives both an in-place window focus and a
+workspace switch triggered by Dockrail, and the destination application receives
+the content exactly once. Releasing on Dockrail does not steal the content, and
+Escape leaves the source intact.
+
+Not proven: non-file MIME types (text, browser image/link), the classic bottom
+dock, multiwindow preview selection, XWayland sources, and any behaviour that
+depends on Task 4's wiring.
+
+### Input method (recorded for honesty)
+
+The drags were driven by a **uinput virtual mouse** (`ydotool`): positions were
+set with `hyprctl` cursor warps and button/motion events came from the virtual
+device, so Hyprland, the Wayland data device, GTK drag-and-drop and nautilus all
+behaved as they do for a physical mouse. No Qt drag API, clipboard transfer,
+synthetic mouse release inside an application, or payload extraction was used.
+A human hand on the same desktop would exercise the identical path; the only
+synthetic element is the input device itself.
+
+Harness note: `ydotool` absolute moves were mis-scaled by pointer acceleration,
+so motion was sent as small relative steps converged against `hyprctl cursorpos`.
 
 ## Handoff
 
-The gate moved to a real desktop (no KVM) because the guest route could not be
-driven by the owner on this machine. What the next agent inherits:
+The gate ran on the owner's live desktop. What the next agent inherits:
 
-- This document: the instrumentation contract, the case matrix (A–I), the
-  pass criteria and the evidence format. Reuse them as-is on the target machine.
-- `feat/external-drag-hover-navigation` (`heads/0f5fb7d`, from `origin/main`
-  `ff7d452`): Task 2 is implemented and unit-tested. Two adapter decisions are
-  deliberately unresolved until this gate returns a result:
-  1. Whether entry acceptance (`drag.accepted = true` in `onEntered` /
-     `onPositionChanged`) changes the action cursor or breaks the final drop.
-  2. Whether a focus/workspace change during the drag emits a spurious
-     `onExited`/unmap that the adapter must distinguish from a genuine exit.
-  Also outstanding: whether `focusToplevelInPlace` warps the pointer.
-- The temporary prototype in this branch was reverted before commit. Its shape
-  is described under "Instrumentation" and can be re-created from this document
-  in minutes; it is a non-visual `DropArea` with empty `keys`, one 500 ms dwell
-  timer, format-name-only logging and `drop.accepted = false`.
-- Do not re-use the KVM harness deviations below as precedent on a real desktop:
-  they were local, uncommitted workarounds for a guest started while the owner
-  was active.
-
-Run this gate on the target machine before wiring Tasks 3–5 further, and record
-the real per-case results here.
+- This document: the executed matrix, the input method, and the remaining gaps.
+- `feat/edhn-surfaces` (`4c2909f`, stacked on `origin/main` `ff7d452`): Task 2
+  and Task 3 are implemented and unit-tested, and the sidebar routes in them are
+  now qualified by the run above.
+- The two adapter decisions this gate existed for are answered for the sidebar
+  window/workspace routes: entry acceptance did not break the transfer and focus
+  or workspace changes did not cancel the source drag. The cursor *shape* on
+  entry (case G) is still unmeasured.
+- Task 4 is still unimplemented, so every classic-dock and multiwindow-preview
+  route remains unqualified. Do not claim them until they are built and run.
+- Task 5's broad app matrix (text, images, XWayland) is still open. The KVM
+  staging artifacts under "Instrumentation" and the guest deviations are history,
+  not precedent.
 
 ## Evidence
 
-- Session evidence root: `~/.local/state/smartdock/dev-sessions/edhn-t1-j/evidence/`
-- Navigation log: guest `/tmp/edhn-t1.log` (copied into the evidence root)
-- Screenshots: `frame-NNN.png` in the evidence root, plus the annotated target
-  map at `Storage/design-export/edhn-t1-gate-map.png`
+- Destination checks: `ls` of `/var/tmp/edhn-live/src` and `/var/tmp/edhn-live/dst`
+  after each case (`payload-a.txt` and `payload-b.txt` each present exactly once
+  in `dst`, absent from `src`; `payload-c.txt` retained in `src` after D and E).
+- Compositor state: `hyprctl activewindow` showed the destination toplevel focused
+  mid-drag for A; `hyprctl monitors` showed HDMI-A-1 on `Work` mid-drag for B/C.
+- Screenshots captured during the run (host `/run/user/1000/hypruse/`): the drag
+  cursor thumbnail over the sidebar row, over the workspace badge, and inside the
+  destination window before release.
+- The staged KVM session's frames and control map remain under
+  `~/.local/state/smartdock/dev-sessions/edhn-t1-j/evidence/` and
+  `Storage/design-export/edhn-t1-gate-map.png`; they belong to the unexecuted
+  guest staging, not to the results above.
 
 ## Verdict
 
-**NO-GO as unproven (gate open), not as failed.** No case ran, so the plan's
-"final drop survives for files, images and text" condition was never tested. The
-gate is GO only if the file cases (A–C) deliver exactly once and the cancellation
-cases (D–E) leave the source intact on the target machine. Tasks 3–5 must not be
-treated as qualified until this matrix is filled in.
+**GO for the sidebar routes that exist in this candidate** (window rows,
+workspace rows and inline workspace badges), based on real file transfers that
+delivered exactly once and survived both focus and workspace activation.
+
+**Still open:** text/image MIME drags, the classic dock, multiwindow preview
+selection and XWayland sources. Those must be qualified after Task 4 and must
+stay listed as limitations until they are.
+
+The two adapter decisions this gate was opened for are now answered for these
+paths:
+
+1. Accepting drag entry does **not** appear to alter the action cursor or break
+   the final drop — every drop delivered once, including after a workspace
+   switch. (Case G's cursor *shape* was not measured, so treat the "cursor does
+   not change" half as unconfirmed.)
+2. A focus or workspace change during the drag did **not** cancel the source
+   drag and did not produce a spurious exit that ended the session; the transfer
+   completed after activation. The adapter's current `onExited` handling is
+   therefore adequate for these two routes.
+3. `focusToplevelInPlace` did **not** warp the pointer.

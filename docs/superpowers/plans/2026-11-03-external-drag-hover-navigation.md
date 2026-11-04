@@ -200,7 +200,7 @@ continue without the originating chat. Base for everything below is
 
 | Task | State | Evidence |
 | --- | --- | --- |
-| 1 — native drag feasibility | **STAGED, NOT EXECUTED — gate open** | `tests/runtime/external-drag-navigation.md` (matrix A–I all NOT EXECUTED, instrumentation contract and case matrix retained, temporary prototype reverted) |
+| 1 — native drag feasibility | **GO for sidebar window/workspace routes** (real desktop run 2026-11-04) | `tests/runtime/external-drag-navigation.md`: A, B/C, D, E PASS; H no pointer warp; G cursor shape unmeasured; text/image/classic routes still open |
 | 2 — settings, coordinator, adapter, `focusToplevelInPlace` | **DONE** | 18 coordinator + 8 adapter QML assertions, config/schema/registry/CLI/grouped-actions/session-pins suites |
 | 3 — sidebar rows, badges, tabs, group expansion | **DONE** | 26 coordinator + 13 adapter QML assertions, sidebar controller/interaction/inline-badge/split-scroll suites |
 | 4 — classic dock, reveal strip, window previews | **NOT STARTED** | no Task 4 code exists |
@@ -210,15 +210,20 @@ Branch layout: `feat/edhn-surfaces` contains Task 2 and Task 3 stacked on
 `origin/main`; `feat/edhn-gate-t1` holds the Task 1 runtime document, which is
 also cherry-picked onto `feat/edhn-surfaces`.
 
-Before Task 4 or 5 continue, run the Task 1 matrix on a machine with a real
-desktop and real applications. Two adapter decisions are deliberately
-unresolved and must be settled by that run:
+Before Task 4 or 5 continue, read `tests/runtime/external-drag-navigation.md`. The
+Task 1 gate was executed on the owner's live desktop (2026-11-04) and returned
+**GO for the sidebar window and workspace routes**: real file drags survived both
+an in-place window focus and a workspace switch, and each delivered exactly once.
+Its two adapter questions are answered for those routes:
 
-1. Whether accepting drag entry (`drag.accepted = true` in `onEntered` /
-   `onPositionChanged`) changes the action cursor or harms the final drop.
-2. Whether a focus/workspace change during the drag emits a spurious
-   `onExited`/unmap that must be distinguished from a genuine pointer exit.
-   Related: whether `focusToplevelInPlace` warps the pointer.
+1. Accepting drag entry did not break the final drop. The action-cursor *shape*
+   on entry was not measured.
+2. A focus/workspace change during the drag did not cancel the source drag or
+   fire a spurious exit that ended the session.
+   Related: `focusToplevelInPlace` did not warp the pointer.
+
+Still unqualified: text and image MIME drags, every classic-dock and
+multiwindow-preview route (Task 4 does not exist yet), and XWayland sources.
 
 Task 4's remaining wiring is enumerated in that task's Files/Interfaces block
 and in the handoff section of the runtime document. Nothing in Tasks 2–3 reads
