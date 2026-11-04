@@ -191,15 +191,30 @@ The gate ran on the owner's live desktop. What the next agent inherits:
   `Storage/design-export/edhn-t1-gate-map.png`; they belong to the unexecuted
   guest staging, not to the results above.
 
-## Verdict
+## Classic dock run (2026-11-04, second pass)
 
-**GO for the sidebar routes that exist in this candidate** (window rows,
-workspace rows and inline workspace badges), based on real file transfers that
-delivered exactly once and survived both focus and workspace activation.
+Same branch, after Task 4. `dockrail dev use`, classic dock on HDMI-A-1,
+defaults plus `showPreviews: true`. All temporary settings (`autoHide`,
+`groupWindows`) were restored and the installed copy re-selected afterwards.
 
-**Still open:** text/image MIME drags, the classic dock, multiwindow preview
-selection and XWayland sources. Those must be qualified after Task 4 and must
-stay listed as limitations until they are.
+| Case | Result | Evidence |
+| --- | --- | --- |
+| C1 — classic icon window target | **PASS** | `payload-t.txt` dragged from **src** onto the icon of the non-focused `dstA` window. The dwell activated `dstA` while the drag was held; the file was released inside it and appeared exactly once. |
+| C2 — normal reveal | **PASS** (existing behaviour) | With `autoHide: true`, a plain hover at the bottom edge revealed the dock. |
+| C3 — reveal while a content drag is held | NOT QUALIFIED | The drag ended when the pointer left the last window for the bare bottom strip; the dock did not reveal. Normal hover reveal works, so this is specific to the drag-held path and needs investigation with a real hand before it is claimed. |
+| C4 — multiwindow icon → preview → exact tile | NOT QUALIFIED | Unreachable in this configuration: with `workspaceLayout: grouped` and `groupWindows: false` every icon is a single window, so no icon represents multiple windows and no preview opens. Needs a flat/app-grouped layout or a deliberate preview trigger. |
+| C5 — release on the classic dock, Escape | NOT EXECUTED | The sidebar equivalents passed; the classic surface was not repeated for these two. |
+
+## Verdict and remaining gaps
+
+**Qualified:** sidebar window rows, workspaces rows and inline workspace badges,
+and the classic bottom dock's running-icon window target — all with real file
+transfers that delivered exactly once, surviving focus and workspace activation.
+
+**Not qualified, and must not be claimed:** the classic reveal strip while a
+content drag is held; multiwindow icon → preview → exact tile selection;
+text and image MIME drags; XWayland sources; multi-monitor mirroring during a
+drag; and the action-cursor shape on target entry.
 
 The two adapter decisions this gate was opened for are now answered for these
 paths:

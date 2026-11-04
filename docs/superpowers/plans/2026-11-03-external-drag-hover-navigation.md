@@ -213,8 +213,8 @@ continue without the originating chat. Base for everything below is
 | 1 — native drag feasibility | **GO for sidebar window/workspace routes** (real desktop run 2026-11-04) | `tests/runtime/external-drag-navigation.md`: A, B/C, D, E PASS; H no pointer warp; G cursor shape unmeasured; text/image/classic routes still open |
 | 2 — settings, coordinator, adapter, `focusToplevelInPlace` | **DONE** | 18 coordinator + 8 adapter QML assertions, config/schema/registry/CLI/grouped-actions/session-pins suites |
 | 3 — sidebar rows, badges, tabs, group expansion | **DONE** | 26 coordinator + 13 adapter QML assertions, sidebar controller/interaction/inline-badge/split-scroll suites |
-| 4 — classic dock, reveal strip, window previews | **NOT STARTED** | no Task 4 code exists |
-| 5 — full CI, real content matrix, Draft PR | **NOT STARTED** | — |
+| 4 — classic dock, reveal strip, window previews | **DONE (wiring + headless tests)**; classic icon window target qualified live; reveal-under-drag and multiwindow preview unqualified | `fe10d67`, plus the 2026-11-04 classic run in the runtime document |
+| 5 — full CI, real content matrix, Draft PR | **CI run; Draft PR opened**; broad app matrix still open | Headless CI replica green apart from four pre-existing `test_settings_features` QML failures confirmed at `origin/main`; one real regression (`test_sidebar_split_qml`) found and fixed |
 
 Branch layout: `feat/edhn-surfaces` contains Task 2 and Task 3 stacked on
 `origin/main`; `feat/edhn-gate-t1` holds the Task 1 runtime document, which is
