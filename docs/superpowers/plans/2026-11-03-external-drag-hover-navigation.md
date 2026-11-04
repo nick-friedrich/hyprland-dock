@@ -214,7 +214,7 @@ continue without the originating chat. Base for everything below is
 | 2 — settings, coordinator, adapter, `focusToplevelInPlace` | **DONE** | 18 coordinator + 8 adapter QML assertions, config/schema/registry/CLI/grouped-actions/session-pins suites |
 | 3 — sidebar rows, badges, tabs, group expansion | **DONE** | 26 coordinator + 13 adapter QML assertions, sidebar controller/interaction/inline-badge/split-scroll suites |
 | 4 — classic dock, reveal strip, window previews | **DONE (wiring + headless tests)**; classic icon window target qualified live; reveal-under-drag and multiwindow preview unqualified | `fe10d67`, plus the 2026-11-04 classic run in the runtime document |
-| 5 — full CI, real content matrix, Draft PR | **Merged (#169, `c4385fd`)**; owner hands-on verification passed the basic gesture, multiwindow preview tiles, text/image drags and mirrored cross-monitor targets | Headless CI green; only the classic reveal-under-drag and XWayland rows stay open, plus a measured cursor-shape check. Remaining rows live in `tests/runtime/external-drag-navigation.md` |
+| 5 — full CI, real content matrix, Draft PR | **Merged (#169, `c4385fd`)**; owner hands-on verification passed the basic gesture, multiwindow preview tiles, text/image drags and mirrored cross-monitor targets | Headless CI green; the auto-hide reveal strip was confirmed by the owner; only XWayland (no X11 drag source on this desktop, untested by choice) and a measured cursor-shape check stay open. Remaining rows live in `tests/runtime/external-drag-navigation.md` |
 
 Branch layout: `feat/edhn-surfaces` contains Task 2 and Task 3 stacked on
 `origin/main`; `feat/edhn-gate-t1` holds the Task 1 runtime document, which is
