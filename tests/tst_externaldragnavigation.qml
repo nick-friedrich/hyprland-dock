@@ -360,6 +360,23 @@ TestCase {
     nav.endSession()
   }
 
+  function test_passiveRevealKeepsEnclosedPendingTarget() {
+    resetActions()
+    var nav = makeNavigation({dwellMs: 40, handoffMs: 40})
+    var owner = makeOwner()
+    var toplevel = createTemporaryObject(ownerFactory, this)
+    actions.alive = [toplevel]
+    // A dock-wide surface hold may arrive before or after the icon target.
+    nav.enter(owner, {key: "reveal:surface", kind: "reveal", passive: true})
+    nav.enter(owner, windowTarget(toplevel))
+    compare(nav.pending.key, "window:0x1")
+    nav.enter(owner, {key: "reveal:surface", kind: "reveal", passive: true})
+    tryCompare(actions, "focusCount", 1, 500)
+    compare(nav.pending, null)
+    verify(nav.heldFor(owner))
+    nav.endSession()
+  }
+
   // --- Sidebar integration: descriptors, revalidation and narrow routing -----
 
   // Shared local probe: records the order of sidebar/window dispatches so tests

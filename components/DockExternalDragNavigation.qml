@@ -144,8 +144,10 @@ Item {
     addHold(owner, token)
 
     if (target.kind === "reveal") {
-      // A reveal strip only holds the surface open; it never arms focus.
-      if (pending && pending.owner === owner) cancelPending()
+      // A reveal strip only holds the surface open; it never arms focus. A
+      // passive reveal is an enclosing surface hold (whole dock, popup body),
+      // so it must not cancel a more specific pending target it encloses.
+      if (target.passive !== true && pending && pending.owner === owner) cancelPending()
       return token
     }
 
