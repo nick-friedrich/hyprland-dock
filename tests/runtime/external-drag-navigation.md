@@ -1,11 +1,13 @@
 # External drag hover navigation — real-app runtime matrix (Task 1 feasibility gate)
 
-Status: **EXECUTED ON THE REAL DESKTOP — GO for the sidebar window and workspace
-route.** The gate ran on the owner's live Omarchy desktop against
-`feat/edhn-surfaces @ 4c2909f` with the real compositor, real applications and a
-real Wayland DnD transfer. Cases A, B/C, D and E passed; G was not measured, H
-showed no pointer warp, and I was not executed; classic-dock and multiwindow
-preview cases remain unqualified because Task 4 is not implemented.
+Status: **EXECUTED — GO for the sidebar and classic-dock routes that exist.**
+The gate ran on the owner's live Omarchy desktop with the real compositor, real
+applications and real Wayland DnD transfers, first against
+`feat/edhn-surfaces @ 4c2909f` and `fe10d67` (agent-driven), then hands-on
+against the merged installed dock `c4385fd` (owner-driven). Sidebar rows, badges,
+mirrored cross-monitor targets, the classic running-icon target, multiwindow
+preview tiles, and text/image drags are qualified. Two rows stay open: the
+classic reveal strip while a content drag is held, and XWayland sources.
 
 ## Scope
 
@@ -202,19 +204,37 @@ defaults plus `showPreviews: true`. All temporary settings (`autoHide`,
 | C1 — classic icon window target | **PASS** | `payload-t.txt` dragged from **src** onto the icon of the non-focused `dstA` window. The dwell activated `dstA` while the drag was held; the file was released inside it and appeared exactly once. |
 | C2 — normal reveal | **PASS** (existing behaviour) | With `autoHide: true`, a plain hover at the bottom edge revealed the dock. |
 | C3 — reveal while a content drag is held | NOT QUALIFIED | The drag ended when the pointer left the last window for the bare bottom strip; the dock did not reveal. Normal hover reveal works, so this is specific to the drag-held path and needs investigation with a real hand before it is claimed. |
-| C4 — multiwindow icon → preview → exact tile | NOT QUALIFIED | Unreachable in this configuration: with `workspaceLayout: grouped` and `groupWindows: false` every icon is a single window, so no icon represents multiple windows and no preview opens. Needs a flat/app-grouped layout or a deliberate preview trigger. |
+| C4 — multiwindow icon → preview → exact tile | **PASS (owner, 2026-11-04)** | Grouped with the context-menu **Group Windows** action, then a real drag hovered the grouped icon: the preview opened at the dwell, hovering a specific tile focused that exact window, and the drop landed. The original not-run note below explained why the default per-window layout could not reach this path. |
 | C5 — release on the classic dock, Escape | NOT EXECUTED | The sidebar equivalents passed; the classic surface was not repeated for these two. |
+
+## Owner verification (2026-11-04, hands-on)
+
+After the merge, the desktop owner ran the gesture themselves with a real mouse on
+the installed dock (`c4385fd`) and reported no oddities. These are human
+observations, not instrumented runs: no logging, no recordings, no timing
+capture.
+
+| Case | Result | What was exercised |
+| --- | --- | --- |
+| Basic gesture | **PASS** | File drag onto a dock icon focused the target window mid-drag and the drop landed. A workspace target switched workspace on hover. Releasing on the dock left the file where it was. |
+| Multiwindow preview → exact tile | **PASS** | With windows grouped via the context-menu **Group Windows** action, hovering the grouped icon opened the preview at the dwell and hovering a specific tile focused that exact window; the drop landed. |
+| Text and image drags | **PASS** | Selected text dragged onto a dock target, and an image dragged off a page into a folder. Both navigated and delivered. |
+| Mirrored sidebar across monitors | **PASS** | With the sidebar mirrored on both outputs, a drag started on one screen activated a target row on the other and the drag continued. |
+
+The owner reported no glitches: no stuck dock, no flicker, no lost files, no
+cursor oddity noticed.
 
 ## Verdict and remaining gaps
 
-**Qualified:** sidebar window rows, workspaces rows and inline workspace badges,
-and the classic bottom dock's running-icon window target — all with real file
-transfers that delivered exactly once, surviving focus and workspace activation.
+**Qualified:** sidebar window rows, workspace rows, inline workspace badges and
+mirrored cross-monitor targets; the classic bottom dock's running-icon target;
+multiwindow preview → exact tile with grouped windows; text and image performs;
+and the cancellation rules (release on Dockrail, Escape) on the sidebar surface.
 
 **Not qualified, and must not be claimed:** the classic reveal strip while a
-content drag is held; multiwindow icon → preview → exact tile selection;
-text and image MIME drags; XWayland sources; multi-monitor mirroring during a
-drag; and the action-cursor shape on target entry.
+content drag is held (C3), XWayland sources, release/Escape repeated on the
+classic surface (C5), and a precise action-cursor-shape measurement. The owner
+saw nothing wrong with the cursor, which is weaker than a measured observation.
 
 The two adapter decisions this gate was opened for are now answered for these
 paths:

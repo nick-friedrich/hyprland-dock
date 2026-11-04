@@ -775,11 +775,12 @@ Behaviour worth knowing:
   and the drag's payload is never read.
 - Ctrl during the drag never triggers the Ctrl-click relocation path.
 
-Qualified on a real desktop for sidebar window/workspace targets and classic
-running-icon targets with real file transfers. The classic reveal strip while a
-content drag is held, multiwindow preview tile selection in workspace-card
-layout, text/image drags and XWayland sources are not yet qualified; see
-`tests/runtime/external-drag-navigation.md`.
+Qualified on a real desktop for sidebar window/workspace targets (including
+mirrored cross-monitor targets), classic running-icon targets, multiwindow
+preview tile selection with grouped windows, and text/image drags — verified by
+the desktop owner on the installed build. The classic reveal strip while a
+content drag is held, XWayland sources and a measured cursor-shape check remain
+open; see `tests/runtime/external-drag-navigation.md`.
 
 ### Window scope filtering
 
