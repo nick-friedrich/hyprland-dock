@@ -224,6 +224,23 @@ class VisibilityTests(unittest.TestCase):
         visible, _ = visible_threads(self.store_with(t), NOW_MS)
         self.assertEqual([row["id"] for row in visible], ["a"])
 
+    def test_unvisited_failed_subagent_stays_hidden(self) -> None:
+        # Regression: subagent threads are never visited by the user
+        # (lastVisitedAt stays at creation), so an unread failure used to pin
+        # an orange "needs you" row in the dock forever, resurfacing after
+        # every snooze expired.
+        t = thread(
+            id="s",
+            status="failed",
+            lastErrorCode="api_error_429",
+            lastErrorClass="usage_limit",
+            lineage={"relationshipToParent": "subagent"},
+            latestRunCompletedAt="2026-10-23T15:00:00.000Z",
+            lastVisitedAt="2026-10-23T14:00:00.000Z",
+        )
+        visible, _ = visible_threads(self.store_with(t), NOW_MS)
+        self.assertEqual(visible, [])
+
     def test_idle_old_hidden_idle_recent_kept(self) -> None:
         old = thread(id="old", status="stopped", updatedAt="2026-10-20T00:00:00.000Z")
         new = thread(id="new", status="stopped", updatedAt="2026-10-23T16:00:00.000Z")
@@ -492,29 +509,46 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(counts["unknown"], 0)
 
     def test_failure_attention_tracks_settlement(self) -> None:
-        for lineage in (None, {"relationshipToParent": "subagent"}):
-            for settled, expected in (
-                ("2026-10-23T15:00:00Z", {}),
-                ("2026-10-23T16:00:00Z", {}),
-                ("2026-10-23T14:00:00Z", {"failure": "blocked"}),
-                ("invalid", {"failure": "blocked"}),
-                (None, {"failure": "blocked"}),
-            ):
-                with self.subTest(lineage=lineage, settled=settled):
-                    store = ShellStore()
-                    store.threads["failure"] = thread(
-                        id="failure", status="failed", lineage=lineage,
-                        latestRunCompletedAt="2026-10-23T15:00:00Z",
-                        settledAt=settled,
+        subagent = {"relationshipToParent": "subagent"}
+        blocked = {"failure": "blocked"}
+        for lineage, settled, expected in (
+            # Root failures need the user until visited or settled.
+            (None, "2026-10-23T15:00:00Z", {}),
+            (None, "2026-10-23T16:00:00Z", {}),
+            (None, "2026-10-23T14:00:00Z", blocked),
+            (None, "invalid", blocked),
+            (None, None, blocked),
+            # Subagent failures never do: the parent run reports them, and a
+            # subagent thread is never visited, so honouring them keeps a
+            # permanent "needs you" dot that survives every snooze.
+            (subagent, "2026-10-23T15:00:00Z", {}),
+            (subagent, "2026-10-23T14:00:00Z", {}),
+            (subagent, None, {}),
+        ):
+            with self.subTest(lineage=lineage, settled=settled):
+                store = ShellStore()
+                store.threads["failure"] = thread(
+                    id="failure", status="failed", lineage=lineage,
+                    latestRunCompletedAt="2026-10-23T15:00:00Z",
+                    settledAt=settled,
+                )
+                snapshot = live_snapshot(store)
+                for key in ("agents", "attention"):
+                    self.assertEqual(
+                        {row["paneId"]: row["status"] for row in snapshot[key]},
+                        expected,
                     )
-                    snapshot = live_snapshot(store)
-                    for key in ("agents", "attention"):
-                        self.assertEqual(
-                            {row["paneId"]: row["status"] for row in snapshot[key]},
-                            expected,
-                        )
-                    self.assertEqual(snapshot["liveCounts"]["blocked"], len(expected))
-                    self.assertEqual(snapshot["liveCounts"]["agents"], len(expected))
+                self.assertEqual(snapshot["liveCounts"]["blocked"], len(expected))
+                self.assertEqual(snapshot["liveCounts"]["agents"], len(expected))
+
+    def test_unread_failure_subagent_is_idle(self) -> None:
+        t = thread(
+            status="failed",
+            latestRunCompletedAt="2026-10-23T15:00:00.000Z",
+            lastVisitedAt="2026-10-23T14:00:00.000Z",
+            lineage={"relationshipToParent": "subagent", "rootThreadId": "r"},
+        )
+        self.assertEqual(classify(t, NOW_MS), "idle")
 
     def test_settlement_does_not_hide_active_subagent_work(self) -> None:
         for active, status in (

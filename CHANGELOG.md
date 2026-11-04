@@ -14,6 +14,9 @@
 
 ### Fixed
 
+- Failed T3 subagent threads no longer pin an orange "needs you" row in the
+  dock. Their failure belongs to the parent run, and a subagent thread is
+  never visited, so the row came back after every snooze expired.
 - Ghost and duplicate workspace sections no longer appear when workspaces are
   destroyed or renumbered quickly. Quickshell can keep stale stand-in
   workspaces (id -1) from late window-list replies; empty ones are now hidden,

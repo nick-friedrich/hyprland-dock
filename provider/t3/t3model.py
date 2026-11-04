@@ -100,7 +100,14 @@ def classify(thread: dict[str, Any], now_ms: int) -> str:
     background = thread.get("pendingBackgroundTasks")
     if isinstance(background, list) and len(background) > 0:
         return "working"
-    if thread.get("status") == "failed" and unread(thread):
+    if (
+        thread.get("status") == "failed"
+        and unread(thread)
+        and not _is_subagent(thread)
+    ):
+        # A subagent failure is the parent run's to report: subagent threads
+        # are never visited by the user (lastVisitedAt stays at creation), so
+        # honouring them here would keep a "needs you" dot forever.
         return "blocked"
     if (
         thread.get("status") == "completed"
