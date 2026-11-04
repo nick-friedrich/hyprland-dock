@@ -5,9 +5,9 @@ The gate ran on the owner's live Omarchy desktop with the real compositor, real
 applications and real Wayland DnD transfers, first against
 `feat/edhn-surfaces @ 4c2909f` and `fe10d67` (agent-driven), then hands-on
 against the merged installed dock `c4385fd` (owner-driven). Sidebar rows, badges,
-mirrored cross-monitor targets, the classic running-icon target, multiwindow
-preview tiles, and text/image drags are qualified. Two rows stay open: the
-classic reveal strip while a content drag is held, and XWayland sources.
+mirrored cross-monitor targets, the classic running-icon target and its reveal
+strip during a held drag, multiwindow preview tiles, and text/image drags are
+qualified. XWayland sources could not be exercised and stay explicitly unknown.
 
 ## Scope
 
@@ -203,7 +203,7 @@ defaults plus `showPreviews: true`. All temporary settings (`autoHide`,
 | --- | --- | --- |
 | C1 — classic icon window target | **PASS** | `payload-t.txt` dragged from **src** onto the icon of the non-focused `dstA` window. The dwell activated `dstA` while the drag was held; the file was released inside it and appeared exactly once. |
 | C2 — normal reveal | **PASS** (existing behaviour) | With `autoHide: true`, a plain hover at the bottom edge revealed the dock. |
-| C3 — reveal while a content drag is held | NOT QUALIFIED | The drag ended when the pointer left the last window for the bare bottom strip; the dock did not reveal. Normal hover reveal works, so this is specific to the drag-held path and needs investigation with a real hand before it is claimed. |
+| C3 — reveal while a content drag is held | **PASS (owner, 2026-11-04)** | With `autoHide: true`, the dock revealed from the bottom edge while a content drag was still held. The earlier agent-driven attempt failed with a synthetic uinput pointer, which is why this needed a real hand; the owner did not separately report the follow-on icon hover/drop in the revealed state, though the same sequence passes in C1 with the dock already open. |
 | C4 — multiwindow icon → preview → exact tile | **PASS (owner, 2026-11-04)** | Grouped with the context-menu **Group Windows** action, then a real drag hovered the grouped icon: the preview opened at the dwell, hovering a specific tile focused that exact window, and the drop landed. The original not-run note below explained why the default per-window layout could not reach this path. |
 | C5 — release on the classic dock, Escape | NOT EXECUTED | The sidebar equivalents passed; the classic surface was not repeated for these two. |
 
@@ -227,14 +227,15 @@ cursor oddity noticed.
 ## Verdict and remaining gaps
 
 **Qualified:** sidebar window rows, workspace rows, inline workspace badges and
-mirrored cross-monitor targets; the classic bottom dock's running-icon target;
-multiwindow preview → exact tile with grouped windows; text and image performs;
-and the cancellation rules (release on Dockrail, Escape) on the sidebar surface.
+mirrored cross-monitor targets; the classic bottom dock's running-icon target and
+its reveal strip during a held content drag; multiwindow preview → exact tile with
+grouped windows; text and image performs; and the cancellation rules (release on
+Dockrail, Escape) on the sidebar surface.
 
-**Not qualified, and must not be claimed:** the classic reveal strip while a
-content drag is held (C3), XWayland sources, release/Escape repeated on the
-classic surface (C5), and a precise action-cursor-shape measurement. The owner
-saw nothing wrong with the cursor, which is weaker than a measured observation.
+**Not qualified, and must not be claimed:** XWayland sources, release/Escape
+repeated on the classic surface (C5), and a precise action-cursor-shape
+measurement. The owner saw nothing wrong with the cursor, which is weaker than a
+measured observation.
 
 The two adapter decisions this gate was opened for are now answered for these
 paths:

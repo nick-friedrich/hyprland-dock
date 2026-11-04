@@ -776,11 +776,13 @@ Behaviour worth knowing:
 - Ctrl during the drag never triggers the Ctrl-click relocation path.
 
 Qualified on a real desktop for sidebar window/workspace targets (including
-mirrored cross-monitor targets), classic running-icon targets, multiwindow
-preview tile selection with grouped windows, and text/image drags — verified by
-the desktop owner on the installed build. The classic reveal strip while a
-content drag is held, XWayland sources and a measured cursor-shape check remain
-open; see `tests/runtime/external-drag-navigation.md`.
+mirrored cross-monitor targets), classic running-icon targets and their reveal
+strip during a held drag, multiwindow preview tile selection with grouped
+windows, and text/image drags — verified by the desktop owner on the installed
+build. XWayland drag sources are untested by choice: this desktop has no X11
+application that can drag content out, so there was nothing to exercise. A
+measured cursor-shape check also remains open; see
+`tests/runtime/external-drag-navigation.md`.
 
 ### Window scope filtering
 
