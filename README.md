@@ -734,6 +734,53 @@ deltas accumulate in 120-unit steps, residual input resets after about 220 ms,
 and minimized targets restore through the shared host-owned window controller
 before focus.
 
+### External drag hover navigation
+
+Holding a file, image, text selection or other externally draggable content and
+hovering a Dockrail window or workspace navigates there without releasing the
+drag, so the original drag continues into the destination application.
+
+```json
+{
+  "dragHoverNavigationEnabled": true,
+  "dragHoverDelayMs": 500
+}
+```
+
+- `dragHoverNavigationEnabled` (default `true`) turns the gesture on or off.
+- `dragHoverDelayMs` (default `500`, integer `100–2000`, 100 ms steps) is how
+  long the pointer must rest on one stable destination before it activates.
+
+In the **sidebar**, hovering a window row focuses that exact window in place, a
+workspace row or badge switches to that workspace, an exact browser-tab row
+focuses its browser window and selects that tab, and a collapsed application row
+expands once so its windows become reachable. The leading inline workspace badge
+wins over the row that contains it.
+
+In the **classic dock**, hovering a running application icon focuses that window,
+with app grouping a multiwindow icon opens its existing window preview so a
+specific tile can be targeted, and hovering a workspace header or strip cell
+switches workspace.
+
+Behaviour worth knowing:
+
+- Activation happens once per hovered target; moving inside the same target does
+  not re-arm it, and a new drag can activate the same target again.
+- The dock reveals from its existing edge strip during a drag and stays open
+  while the drag is on the dock or its window preview.
+- Releasing on Dockrail never takes the content: the drop is rejected so the
+  source drag ends normally. Escape cancels and leaves you at the reached
+  destination (no focus or workspace restore).
+- Hovering never launches, minimizes, closes, relocates or writes configuration,
+  and the drag's payload is never read.
+- Ctrl during the drag never triggers the Ctrl-click relocation path.
+
+Qualified on a real desktop for sidebar window/workspace targets and classic
+running-icon targets with real file transfers. The classic reveal strip while a
+content drag is held, multiwindow preview tile selection in workspace-card
+layout, text/image drags and XWayland sources are not yet qualified; see
+`tests/runtime/external-drag-navigation.md`.
+
 ### Window scope filtering
 
 `windowScope` filters individual running windows before grouping. `all` preserves

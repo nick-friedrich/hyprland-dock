@@ -52,6 +52,7 @@ class SidebarSplitProductionQmlTests(unittest.TestCase):
               property real naturalContentHeight: 0; property real rowHeight: 34
               property string panelConnector; property bool panelCollapsed; property bool presentationVisible
               property var tabForwardTarget
+              property var navigationOwner
               signal contextRequested(var target, var anchorItem)
               signal dismissContextRequested()
             }''',

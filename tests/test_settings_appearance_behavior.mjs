@@ -14,6 +14,22 @@ assert.equal(registry.editability(
   metadata.settings.hoverGlowOpacity.ui, {hoverGlowEnabled:false},1).enabled,false)
 assert.equal(registry.editability(
   metadata.settings.hoverGlowOpacity.ui, {hoverGlowEnabled:true},1).enabled,true)
+assert.equal(registry.editability(
+  metadata.settings.dragHoverDelayMs.ui, {dragHoverNavigationEnabled:false},1).enabled,false,
+  'drag hover delay is dimmed while external drag navigation is off')
+assert.equal(registry.editability(
+  metadata.settings.dragHoverDelayMs.ui, {dragHoverNavigationEnabled:true},1).enabled,true)
+assert.equal(metadata.settings.dragHoverNavigationEnabled.ui.surface,'all')
+assert.equal(metadata.settings.dragHoverDelayMs.ui.surface,'all')
+const sidebarHost=hostHarness({presentationMode:'sidebar'})
+const sidebarEffective=sidebarHost.request('config.get',{effective:true}).data.settings
+assert.equal(sidebarEffective.dragHoverNavigationEnabled,true,
+  'drag navigation stays applicable on a sidebar-only desktop')
+assert.equal(sidebarEffective.dragHoverDelayMs,500)
+assert.equal(sidebarEffective.showPreviews,false,
+  'preview applicability is unchanged by the drag controls')
+assert.match(read('components/DockSettingsGeneralSection.qml'),/modelData\.rows\.every/,
+  'Behavior card applicability derives from mixed row surfaces')
 assert.deepEqual(plain(pair.colorOptions()).map(x=>x.value).slice(0,2),['default','@accent'])
 assert.equal(pair.validHex('#aBcDEF'),true)
 assert.equal(pair.validHex('#12345678'),true)

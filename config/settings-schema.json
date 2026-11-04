@@ -203,6 +203,43 @@
         "commit": "change"
       }
     },
+    "dragHoverNavigationEnabled": {
+      "type": "boolean",
+      "description": "Dwell on a dock or sidebar window/workspace target while dragging external content to navigate there.",
+      "ui": {
+        "section": "behavior",
+        "group": "windows",
+        "order": 430,
+        "label": "External drag navigation",
+        "help": "Dwell on a dock or sidebar window/workspace target while dragging external content to navigate there.",
+        "control": "toggle",
+        "surface": "all",
+        "visibility": "normal",
+        "commit": "change"
+      }
+    },
+    "dragHoverDelayMs": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 2000,
+      "effectiveStep": 100,
+      "description": "Dwell time before an external drag activates a window or workspace; active when external drag navigation is on.",
+      "ui": {
+        "section": "behavior",
+        "group": "windows",
+        "order": 440,
+        "label": "Drag hover delay",
+        "help": "Dwell time before an external drag activates a window or workspace; active when external drag navigation is on.",
+        "control": "slider",
+        "surface": "all",
+        "visibility": "normal",
+        "requires": {
+          "dragHoverNavigationEnabled": true
+        },
+        "unit": "ms",
+        "commit": "release"
+      }
+    },
     "showTrash": {
       "type": "boolean",
       "description": "Show Trash and enable its existing polling; does not empty Trash.",

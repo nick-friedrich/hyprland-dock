@@ -134,6 +134,36 @@ function fixture(usingLua = false) {
   assert.equal(requests.length, 2)
 }
 
+// External drag hover focuses in place under window and workspace pins.
+{
+  const f = fixture(false)
+  const { actions: a, A, requests } = f
+  assert.equal(a.pinWorkspaceToMonitor('id:3'), true)
+  assert.equal(a.pinWindowToWorkspace(A), true)
+  requests.length = 0
+  assert.equal(a.focusToplevelInPlace(A), true)
+  assert.deepEqual(requests, [DockModel.focusWindowRequest(a.addressFor(A), false)])
+  assert.equal(a.windowWorkspacePin(A).workspace, 'id:3',
+    'hover keeps the window pin')
+  assert.equal(a.workspaceMonitorPin('id:3').monitor, 'id:0',
+    'hover keeps the workspace pin')
+  assert.doesNotMatch(requests.join(' '), /moveworkspace|movecurrentworkspace/i,
+    'hover never routes through monitor relocation')
+}
+{
+  const f = fixture(false)
+  const { actions: a, A, handles, requests } = f
+  assert.equal(a.pinWindowToWorkspace(A), true)
+  assert.equal(a.minimizeToplevel(A, true), true)
+  handles[0].lastIpcObject.workspace = { name: 'special:smartdock-minimized' }
+  requests.length = 0
+  assert.equal(a.focusToplevelInPlace(A), true)
+  assert.deepEqual(requests, ['movetoworkspace 3,address:0xa1',
+    'focuswindow address:0xa1'], 'hover restores then focuses the pinned window')
+  assert.equal(a.windowWorkspacePin(A).workspace, 'id:3')
+  assert.doesNotMatch(requests.join(' '), /moveworkspace|movecurrentworkspace/i)
+}
+
 // Workspace pins turn every cross-monitor activation into focus-in-place.
 {
   const f = fixture(false)

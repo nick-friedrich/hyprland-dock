@@ -22,6 +22,23 @@ Item {
   property bool compactActivityLayout: false
   property url fallbackArtwork: ""
   property bool captureStopped: false
+  // External content-drag hover: this exact live window is the destination.
+  // Destructive controls (the close button) stay outside the drag region,
+  // matching the existing click surface.
+  property var navigation: null
+  property QtObject navigationOwner: null
+  readonly property var externalDragArea: tileDragArea
+  readonly property bool externalEligible: !!root.navigation && !!root.toplevel
+    && !!root.windowActions && root.windowActions.isAlive(root.toplevel)
+  readonly property var externalTarget: root.externalDragTarget()
+
+  function externalDragTarget() {
+    if (!root.externalEligible) return null
+    var address = String(root.windowActions.addressFor(root.toplevel) || "")
+    if (!address) return null
+    return {key: "window:" + address, kind: "window", toplevel: root.toplevel,
+      anchor: root, priority: 0}
+  }
   signal activateRequested(var toplevel, bool pullToMonitorWorkspace)
   signal closeRequested(var toplevel)
 
@@ -231,6 +248,17 @@ Item {
         | Qt.AltModifier | Qt.MetaModifier)
       root.activateRequested(root.toplevel, keys === Qt.ControlModifier)
     }
+  }
+
+  DockExternalDragArea {
+    id: tileDragArea
+
+    anchors.fill: parent
+    anchors.rightMargin: closeButton.width + 10
+    navigation: root.navigation
+    owner: root.navigationOwner
+    targetDescriptor: root.externalTarget
+    navigationEnabled: root.externalEligible
   }
 
   Component.onDestruction: preview.captureSource = null

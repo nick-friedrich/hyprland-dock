@@ -43,7 +43,7 @@ Each setting has one **canonical** editing home. Features additionally offers sc
 | **Appearance** | Icon size, hover magnification and reach, hover glow, background opacity, interface animations, theme/custom colours, and theme/custom border width. |
 | **Layout** | Per-monitor Classic/Sidebar presentation, sidebar edge/width, classic auto-hide/reserved space/margin, and **Displays**, **Sidebar**, **Classic dock** cards. Classic dock contains Size and position, Hiding, and Apps on the dock (Arrange apps tiles with dependent controls). |
 | **Behavior · Pointer** | Left click, middle click, and scroll actions. Destructive actions such as closing an app's windows are marked as destructive. |
-| **Behavior · Windows** | Window previews and window behavior controls. |
+| **Behavior · Windows** | Window previews, external drag navigation, and its dwell delay. The drag controls apply to both presentations. |
 | **Behavior · Attention** | Attention badges, urgent nudge, launcher badge style/count behavior, Herdr agent state on terminal icons, and Claude Desktop session indicators. |
 | **Sidebar & Widgets** | Enabled/ordered sidebar widgets, including `herdr.agents`; one ordered list with an **Off** group and a Create widget form. Compact workspace rows move to Layout › Sidebar; Chrome tabs move to Apps › Chrome. Widget collapse stays on its card. |
 | **Features** | Independent runtime readiness badges and aggregate feature switches for Chrome, Coding agents and Launcher counts, plus explicit Add/Remove launchers; Python detection through the asynchronous INF-2 bridge, with refresh on open/focus and polling only while visible and needed. |
@@ -167,7 +167,7 @@ Widgets: one enabled-order list and **Off** group, grip + keyboard **Alt+↑/↓
 
 ### Canonical setting mapping (frozen canvas board 13)
 
-All **59 settings** appear below. The plan's four reversals and moved homes override stale lines elsewhere in the canvas. Color/border *Enabled flags are paired into one primary control; `position` (fixed bottom), `groupWindows` (deprecated), `sidebarWidgetCollapsed` (in-place), and `sidebarMonitor` (legacy banner) have no ordinary generated row.
+All **62 settings** appear below. The plan's four reversals and moved homes override stale lines elsewhere in the canvas. Color/border *Enabled flags are paired into one primary control; `position` (fixed bottom), `groupWindows` (deprecated), `sidebarWidgetCollapsed` (in-place), and `sidebarMonitor` (legacy banner) have no ordinary generated row.
 
 | Key | Section | Group | Label |
 | --- | --- | --- | --- |
@@ -212,6 +212,8 @@ All **59 settings** appear below. The plan's four reversals and moved homes over
 | `middleClickAction` | Behavior | Pointer | Middle click |
 | `scrollAction` | Behavior | Pointer | Scroll |
 | `showPreviews` | Behavior | Windows | Window previews |
+| `dragHoverNavigationEnabled` | Behavior | Windows | External drag navigation |
+| `dragHoverDelayMs` | Behavior | Windows | Drag hover delay |
 | `workspaceGroups` | Behavior | Windows | Grouped apps |
 | `attentionBadgesEnabled` | Behavior | Attention | Attention badges |
 | `launcherBadgeMode` | Behavior | Attention | Badge style |

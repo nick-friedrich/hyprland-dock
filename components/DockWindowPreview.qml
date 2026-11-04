@@ -22,6 +22,17 @@ PopupWindow {
   property bool previewCaptureEnabled: true
   property var previewArtwork: ({})
   property var mutedServices: []
+  // External content-drag session: the host coordinator and the dock surface
+  // that owns this popup's visibility hold. A drag-opened preview is not
+  // dismissed by ordinary pointer-exit logic; its own membership and the
+  // coordinator's handoff govern it.
+  property var navigation: null
+  property QtObject navigationOwner: null
+  // True while any surface owned by the dock (dock body, reveal strip or this
+  // popup) still holds the external drag. The dock uses the same owner hold for
+  // auto-hide; the popup adds its own membership on top of it.
+  readonly property bool externalDockHeld: root.navigation && root.navigationOwner
+    ? root.navigation.heldFor(root.navigationOwner) : false
 
   property Item anchorItem: null
   property DockWorkspaceLayout clipItem: null
@@ -33,6 +44,9 @@ PopupWindow {
   property var applicationEntry: null
   property var members: []
   property bool anchorHovered: false
+  property bool dragSession: false
+  property bool externalDragActive: false
+  property bool externalDragGrace: false
   property int openDelayMs: 220
   property int closeGraceMs: 180
 
@@ -82,7 +96,7 @@ PopupWindow {
   property string herdrFocusHint: "Click a row to focus its pane."
   property var herdrCounters: []
   readonly property bool showWindowPreviews:
-    root.members.length >= 2 && !root.herdrOnly
+    root.members.length >= 2 && (!root.herdrOnly || root.dragSession)
   readonly property int activityContentHeight: root.activityRows.length > 0
     ? root.activityRows.length * root.activityRowHeight
       + Math.max(0, root.activityRows.length - 1) * root.separatorHeight : 0
@@ -115,7 +129,8 @@ PopupWindow {
           * root.tileSpacing
     : root.previewContentHeight
   readonly property int contentWidth: root.herdrOnly
-    ? Style.space(432)
+    ? (root.showWindowPreviews
+      ? Math.max(Style.space(432), root.previewFlowWidth) : Style.space(432))
     : root.hasSupplementaryContent
       ? Math.max(root.activityWidth, root.previewFlowWidth)
       : root.previewFlowWidth
@@ -123,16 +138,21 @@ PopupWindow {
     ? root.sectionSpacing + root.separatorHeight
       + root.sectionSpacing + root.windowLabelHeight
       + root.sectionSpacing + root.previewFlowHeight : 0
+  // The window section is ordinary supplementary chrome for content previews,
+  // and is added around the agent list when a drag session must expose exact
+  // tiles that agent-only presentation would otherwise suppress.
+  readonly property bool previewSectionChrome: root.showWindowPreviews
+    && (root.hasSupplementaryContent || root.herdrOnly)
   readonly property int supplementaryContentHeight:
     (root.hasSupplementaryContent ? root.headerHeight : 0)
     + (root.hasActivity ? root.sectionSpacing + root.naturalActivityListHeight : 0)
     + (root.hasAgents ? root.sectionSpacing + root.agentHeaderHeight
       + root.sectionSpacing + root.agentListHeight : 0)
     + (root.herdrOnly ? root.sectionSpacing + root.agentFooterHeight : 0)
-  readonly property int naturalContentHeight: root.herdrOnly
+  readonly property int naturalContentHeight: root.herdrOnly && !root.showWindowPreviews
     ? root.agentHeaderHeight + root.sectionSpacing + root.agentListHeight
       + root.sectionSpacing + root.agentFooterHeight
-    : root.hasSupplementaryContent
+    : root.hasSupplementaryContent || (root.herdrOnly && root.showWindowPreviews)
       ? root.supplementaryContentHeight + root.previewSectionHeight
       : root.previewFlowHeight
   readonly property int desiredWidth: root.popupPadding * 2 + root.contentWidth
@@ -203,6 +223,9 @@ PopupWindow {
     root.herdrFocusHint = "Click a row to focus its pane."
     root.herdrCounters = []
     root.anchorHovered = false
+    root.dragSession = false
+    root.externalDragActive = false
+    root.externalDragGrace = false
     root.anchorItem = null
   }
 
@@ -238,7 +261,8 @@ PopupWindow {
     root.anchor.rect.y = Math.round(point.y)
   }
 
-  function requestPreview(anchorItem, desktopId, toplevels, applicationEntry) {
+  function requestPreview(anchorItem, desktopId, toplevels, applicationEntry,
+                          openImmediately) {
     var requested = root.liveMembers(toplevels)
     var requestedActivities = ActivityModel.presentation(
       anchorItem && Array.isArray(anchorItem["previewActivities"])
@@ -250,7 +274,7 @@ PopupWindow {
           requested.length, requestedActivities.length, requestedAgents.length)
         || (root.clipItem && !root.clipItem.containsItem(anchorItem))) {
       if (root.anchorItem === anchorItem) root.dismissImmediately()
-      return
+      return false
     }
 
     var switching = root.visible && root.anchorItem
@@ -274,18 +298,59 @@ PopupWindow {
       ? anchorItem["previewHerdrCounters"] : []
     root.anchorHovered = true
 
-    if (root.visible || switching) {
+    if (root.visible || switching || openImmediately === true) {
       openTimer.stop()
       root.visible = true
       Qt.callLater(root.reanchor)
     } else {
       openTimer.restart()
     }
+    return true
+  }
+
+  // Opened by the shared coordinator after its dwell already elapsed: no second
+  // hover delay. Tiles stay exposed for this session even when agent-only
+  // presentation would otherwise suppress them, and dismissal follows drag
+  // membership plus the coordinator handoff instead of pointer-exit heuristics.
+  function requestDragPreview(anchorItem, desktopId, toplevels, applicationEntry) {
+    root.dragSession = true
+    var opened = root.requestPreview(anchorItem, desktopId, toplevels,
+      applicationEntry, true)
+    if (!opened) {
+      root.dragSession = false
+      return false
+    }
+    root.externalDragGrace = false
+    handoffTimer.stop()
+    return true
+  }
+
+  // The popup keeps its own membership state (content drag or handoff grace).
+  // It never treats a content drag as an ordinary pointer exit.
+  function noteExternalDragMembership(active) {
+    if (active) {
+      root.externalDragActive = true
+      root.externalDragGrace = false
+      handoffTimer.stop()
+      closeTimer.stop()
+      return
+    }
+    if (!root.externalDragActive || root.externalDragGrace) return
+    root.externalDragGrace = true
+    handoffTimer.restart()
+  }
+
+  function scheduleExternalDismissal() {
+    if (!root.visible || !root.anchorItem) return
+    if (root.externalDragActive || root.popupHovered || root.anchorHovered) return
+    if (root.externalDockHeld) return
+    closeTimer.restart()
   }
 
   function releasePreview(anchorItem) {
     if (anchorItem && root.anchorItem !== anchorItem) return
     root.anchorHovered = false
+    if (root.dragSession || root.externalDragActive) return
     if (!root.visible) {
       root.dismissImmediately()
       return
@@ -392,8 +457,24 @@ PopupWindow {
     interval: root.closeGraceMs
     repeat: false
     onTriggered: {
-      if (!root.anchorHovered && !root.popupHovered)
+      if (!root.anchorHovered && !root.popupHovered
+          && !root.externalDragActive && !root.externalDockHeld)
         root.dismissImmediately()
+    }
+  }
+
+  // Coordinator-class handoff grace: a content drag that leaves this popup for
+  // the dock (or the reverse) keeps the popup reachable, and a drag that leaves
+  // both surfaces lets the ordinary close grace run once the handoff expires.
+  Timer {
+    id: handoffTimer
+    interval: root.navigation && Number(root.navigation.handoffMs) > 0
+      ? Number(root.navigation.handoffMs) : 200
+    repeat: false
+    onTriggered: {
+      root.externalDragGrace = false
+      root.externalDragActive = false
+      root.scheduleExternalDismissal()
     }
   }
 
@@ -413,8 +494,21 @@ PopupWindow {
       id: popupHover
       onHoveredChanged: {
         if (hovered) closeTimer.stop()
-        else if (!root.anchorHovered && root.visible) closeTimer.restart()
+        else if (!root.anchorHovered && !root.dragSession && root.visible)
+          closeTimer.restart()
       }
+    }
+
+    // Whole-popup membership: a content drag on any part of the preview keeps
+    // the dock (same owner) reachable and never reads the payload.
+    DockExternalDragArea {
+      id: previewSurfaceDrag
+
+      anchors.fill: parent
+      navigation: root.navigation
+      owner: root.navigationOwner
+      navigationEnabled: !!root.navigation
+      targetDescriptor: ({key: "reveal:preview", kind: "reveal", passive: true})
     }
 
     Flickable {
@@ -1022,7 +1116,7 @@ PopupWindow {
         }
 
         Item {
-          visible: root.hasSupplementaryContent && root.showWindowPreviews
+          visible: root.previewSectionChrome
           width: contentFlow.width
           height: root.separatorHeight
 
@@ -1033,7 +1127,7 @@ PopupWindow {
         }
 
         Item {
-          visible: root.hasSupplementaryContent && root.showWindowPreviews
+          visible: root.previewSectionChrome
           width: contentFlow.width
           height: root.windowLabelHeight
 
@@ -1054,10 +1148,10 @@ PopupWindow {
         Item {
           id: tileFlow
           visible: root.showWindowPreviews
-          width: root.hasSupplementaryContent
+          width: root.hasSupplementaryContent || root.herdrOnly
             ? contentFlow.width : root.previewFlowWidth
           height: root.previewFlowHeight
-          clip: root.hasSupplementaryContent
+          clip: root.hasSupplementaryContent || root.herdrOnly
 
           Flickable {
             id: previewList
@@ -1111,6 +1205,8 @@ PopupWindow {
                 fallbackArtwork: root.previewArtwork[modelData.title] || ""
                 previewWidth: root.tileWidth
                 previewHeight: root.tilePreviewHeight
+                navigation: root.navigation
+                navigationOwner: root.navigationOwner
                 width: root.tileWidth
                 height: root.tileHeight
                 x: root.orientationHorizontal
@@ -1141,6 +1237,26 @@ PopupWindow {
   onAnchorItemChanged: {
     if (!root.anchorItem && root.desktopId !== "")
       root.dismissImmediately()
+  }
+
+  Connections {
+    target: previewSurfaceDrag
+    function onContainsDragChanged() {
+      root.noteExternalDragMembership(previewSurfaceDrag.containsDrag)
+    }
+  }
+
+  Connections {
+    target: root.navigation
+    ignoreUnknownSignals: true
+    function onHoldRevisionChanged() { root.scheduleExternalDismissal() }
+    function onSessionActiveChanged() {
+      if (root.navigation && root.navigation.sessionActive) return
+      root.externalDragActive = false
+      root.externalDragGrace = false
+      handoffTimer.stop()
+      root.scheduleExternalDismissal()
+    }
   }
 
   Connections {

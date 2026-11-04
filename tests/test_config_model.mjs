@@ -25,6 +25,22 @@ function freeze(value) {
   return value;
 }
 const model = loadModel('DockConfigModel.js');
+const dockModel = loadModel('DockModel.js');
+assert.equal(defaults.dragHoverNavigationEnabled, true);
+assert.equal(defaults.dragHoverDelayMs, 500);
+assert.equal(schema.settings.dragHoverNavigationEnabled.type, 'boolean');
+assert.equal(schema.settings.dragHoverDelayMs.type, 'integer');
+assert.equal(schema.settings.dragHoverDelayMs.minimum, 100);
+assert.equal(schema.settings.dragHoverDelayMs.maximum, 2000);
+assert.equal(schema.settings.dragHoverDelayMs.effectiveStep, 100);
+assert.deepEqual(plain(dockModel.normalizeSetting('dragHoverNavigationEnabled', 'true')), true);
+assert.deepEqual(plain(dockModel.normalizeSetting('dragHoverNavigationEnabled', false)), false);
+assert.equal(dockModel.normalizeSetting('dragHoverDelayMs', 42), 100);
+assert.equal(dockModel.normalizeSetting('dragHoverDelayMs', 199), 200);
+assert.equal(dockModel.normalizeSetting('dragHoverDelayMs', 5000), 2000);
+assert.equal(dockModel.normalizeSetting('dragHoverDelayMs', 'not-a-number'), 500);
+assert.ok(!plain(dockModel.inactiveClassicSettings(true)).includes('dragHoverNavigationEnabled'));
+assert.ok(!plain(dockModel.inactiveClassicSettings(true)).includes('dragHoverDelayMs'));
 const current = freeze({ ...defaults, pinned: ['code', 'Unavailable.App'],
   hiddenApplications: ['Unavailable.App'], margin: -7, clickAction: 'launch',
   extensionData: { keep: [1, 'unchanged'] } });
@@ -64,6 +80,8 @@ for (const patch of [{ hoverGlowOpacity: .72 }, { margin: 1000000 },
   { pinned: ['Code.desktop', 'Unavailable App'] },
   { controlCommand: 'literal $(not-executed); command' },
   { browserActivityMutedServices: ['gmail', 'whatsapp'] },
+  { dragHoverNavigationEnabled: false },
+  { dragHoverDelayMs: 700 },
   { sidebarWidgetCollapsed: {'future.clock': true, 'fixture.one': false} }])
   assert.equal(model.validatePatch(patch, schema).ok, true, JSON.stringify(patch));
 for (const patch of [{ browserActivityMutedServices: ['Gmail'] },
@@ -73,7 +91,11 @@ for (const patch of [{ browserActivityMutedServices: ['Gmail'] },
   { sidebarWidgetCollapsed: [] },
   { sidebarWidgetCollapsed: {'../bad': true} },
   { sidebarWidgetCollapsed: {constructor: true} },
-  { sidebarWidgetCollapsed: {'fixture.one': 'yes'} }])
+  { sidebarWidgetCollapsed: {'fixture.one': 'yes'} },
+  { dragHoverNavigationEnabled: 'false' },
+  { dragHoverDelayMs: 99 },
+  { dragHoverDelayMs: 2001 },
+  { dragHoverDelayMs: 500.5 }])
   assert.equal(model.validatePatch(patch, schema).ok, false, JSON.stringify(patch));
 
 const preferences = model.preferenceResetPatch(defaults, schema);

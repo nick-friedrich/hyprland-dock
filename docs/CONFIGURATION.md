@@ -6,7 +6,7 @@ Use [the agent workflow](AGENT_CONFIGURATION.md) for minimal, reversible changes
 
 ## All declared settings
 
-Defaults below are JSON literals. `tests/test_cli_docs.py` checks these 58 rows against the shipped defaults. Bounds apply to new CLI writes; compatible legacy requested values survive unrelated changes. There is no automatic whole-file migration.
+Defaults below are JSON literals. `tests/test_cli_docs.py` checks these 60 rows against the shipped defaults. Bounds apply to new CLI writes; compatible legacy requested values survive unrelated changes. There is no automatic whole-file migration.
 
 | Key | Declared default | New-write type, limits and dependencies |
 | --- | --- | --- |
@@ -19,6 +19,8 @@ Defaults below are JSON literals. `tests/test_cli_docs.py` checks these 58 rows 
 | `hoverGlowOpacity` | `0.72` | Number 0–1; effective step 0.05. |
 | `hoverGlowRadius` | `28` | Number 0–100; effective step 5; relevant when glow is enabled. |
 | `showPreviews` | `true` | Boolean; permits ordinary grouped-window previews and the previews pointer action. |
+| `dragHoverNavigationEnabled` | `true` | Boolean; dwell on a dock or sidebar window/workspace target while dragging external content to navigate there. Applies to both presentations. |
+| `dragHoverDelayMs` | `500` | Integer 100–2000 ms; effective step 100. Dwell time before external drag navigation activates; dimmed while dragHoverNavigationEnabled is false and preserved. |
 | `showTrash` | `true` | Boolean; false removes Trash and pauses its polling, never empties it. |
 | `margin` | `10` | Nonnegative integer, no arbitrary maximum; preserved by preference reset. |
 | `backgroundOpacity` | `0.88` | Number 0–1; effective step 0.05; multiplies background color alpha. |

@@ -869,6 +869,29 @@ Item {
     return false
   }
 
+  // Narrow external-navigation entry point: focus the exact live window in
+  // place. A Dockrail-minimized window is restored to its recorded origin and
+  // then focused explicitly; the empty-monitor activateToplevel restore branch
+  // returns after restoring even when focusAfterRestore is true.
+  function focusToplevelInPlace(toplevel) {
+    if (!isAlive(toplevel)) return false
+    var address = addressFor(toplevel)
+    if (!address) return false
+
+    if (isMinimized(toplevel)) {
+      if (!restoreToplevel(toplevel, false)) return false
+      var focusRequest = DockModel.focusWindowRequest(address, Hyprland.usingLua)
+      if (dispatchRequest(focusRequest)) return true
+      if (typeof toplevel.activate === "function") {
+        toplevel.activate()
+        return true
+      }
+      return false
+    }
+
+    return activateToplevel(toplevel, false)
+  }
+
   function cycleToplevels(toplevels, direction, activeToplevel, originOnly,
                           activationMonitor) {
     var members = liveMembers(toplevels)

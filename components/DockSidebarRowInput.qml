@@ -2,6 +2,8 @@ import QtQuick
 
 // Native Qt pointer handlers shared by wide/rail rows. Capture identities and
 // the clicked connector before requesting focus. Unknown modifiers fail closed.
+// The external content-drag adapter is a separate native region: it never
+// simulates a press, remembers keyboard focus, or starts the internal row drag.
 Item {
   id: root
   required property var controller
@@ -12,6 +14,21 @@ Item {
   property bool workspaceHeader: false
   property bool dragEnabled: true
   property var viewport: null
+  // Shared external-drag coordinator and the surface owner that holds it open.
+  // Rows only supply identity; the controller owns every dispatch.
+  property var navigation: root.controller
+    ? root.controller.externalDragNavigation || null : null
+  property var navigationOwner: null
+  property bool navigationEnabled: true
+  // Child-target priority: the inline workspace badge outranks its enclosing row
+  // for the same visit, independent of drag-entry order.
+  property int externalPriority: 0
+  property var externalTarget: null
+  readonly property var externalDragArea: externalArea
+  readonly property bool externalEligible: enabled && !!root.navigation
+    && root.navigationEnabled
+    && !controller.rowDragActive && !controller.resizeActive
+    && !controller.interactionBusy
   // Key last published to viewport; clear uses this even after kind/key change.
   property string lastPublishedWorkspaceKey: ""
   property var pressedTarget: null
@@ -25,6 +42,20 @@ Item {
   signal focusRequested()
   signal dragMoved(var scenePoint)
   signal dragReleased(var scenePoint)
+
+  // Capture once per stable row identity. The controller revalidates liveness,
+  // location and provider state immediately before dispatch, so a held capture
+  // can only ever fail closed. Recomputation is skipped while a token is held to
+  // keep the dwell timer from restarting on unrelated inventory refreshes.
+  function refreshExternalTarget() {
+    var descriptor = null
+    if (root.rowKey && root.controller
+        && typeof root.controller.externalDragTarget === "function")
+      descriptor = root.controller.externalDragTarget(root.rowKey)
+    root.externalTarget = descriptor
+      ? Object.assign({}, descriptor, {priority: root.externalPriority})
+      : null
+  }
 
   function clearPublishedWorkspaceHover() {
     var published = root.lastPublishedWorkspaceKey
@@ -150,8 +181,33 @@ Item {
       if (!root.controller.rowDragActive && root.dragOwned) root.cancelGesture("controller-cancelled")
     }
   }
+  // Recapture on drag entry so a row exposed by a projection refresh (expanded
+  // application, provider snapshot, scroll anchor) is immediately eligible.
+  Connections {
+    target: externalArea
+    function onContainsDragChanged() {
+      if (externalArea.containsDrag) root.refreshExternalTarget()
+    }
+  }
+  // Nonvisual native drag region. It is deliberately outside the tap/drag
+  // handlers above: external hover never fires activated/focusRequested or the
+  // internal row-drag lifecycle.
+  DockExternalDragArea {
+    id: externalArea
+    anchors.fill: parent
+    navigation: root.navigation
+    owner: root.navigationOwner
+    targetDescriptor: root.externalTarget
+    navigationEnabled: root.externalEligible
+  }
   onEnabledChanged: if (!enabled) root.cancelGesture("input-disabled")
-  onRowKeyChanged: root.cancelGesture("delegate-reassigned")
+  onRowKeyChanged: {
+    root.cancelGesture("delegate-reassigned")
+    root.refreshExternalTarget()
+  }
+  onExternalPriorityChanged: if (externalArea.token === 0) root.refreshExternalTarget()
+  onNavigationEnabledChanged: if (externalArea.token === 0) root.refreshExternalTarget()
   onWorkspaceHeaderChanged: if (!workspaceHeader) root.clearPublishedWorkspaceHover()
+  Component.onCompleted: root.refreshExternalTarget()
   Component.onDestruction: root.cancelGesture("source-destroyed")
 }

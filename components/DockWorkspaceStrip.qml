@@ -21,6 +21,10 @@ Item {
   required property int iconSize
   required property string position
   property bool animationsEnabled: true
+  // External content-drag hover: each flat strip cell is a workspace-only
+  // target keyed by its canonical workspace identity.
+  property var navigation: null
+  property QtObject navigationOwner: null
   signal workspaceRequested(int workspaceId, bool pullToMonitor)
 
   function workspaceForId(id) {
@@ -30,6 +34,15 @@ Item {
         return values[i]
     }
     return null
+  }
+
+  // Flat strip hover target: workspace-only, keyed by canonical identity, and
+  // eligible only for a cell the presentation currently renders.
+  function externalDragDescriptor(workspaceId, present) {
+    if (!root.navigation || present !== true) return null
+    var identity = "id:" + Number(workspaceId)
+    return {key: "workspace:" + identity, kind: "workspace",
+      workspaceIdentity: identity, anchor: null, priority: 0}
   }
 
   readonly property int cellSize: Math.max(32, Math.round(iconSize * 0.75))
@@ -150,6 +163,17 @@ Item {
           grabPermissions: PointerHandler.CanTakeOverFromItems
             | PointerHandler.CanTakeOverFromHandlersOfDifferentType
           onTapped: root.workspaceRequested(workspaceCell.workspaceId, true)
+        }
+
+        DockExternalDragArea {
+          id: workspaceCellDragArea
+
+          anchors.fill: parent
+          navigation: root.navigation
+          owner: root.navigationOwner
+          navigationEnabled: !!root.navigation && workspaceSlot.modelData.present
+          targetDescriptor: root.externalDragDescriptor(workspaceCell.workspaceId,
+            workspaceSlot.modelData.present)
         }
 
         Rectangle {

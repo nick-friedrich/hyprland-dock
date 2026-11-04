@@ -84,7 +84,7 @@ Item {
         required property var modelData
         readonly property bool classicCard: root.section === "appearance"
           ? modelData.id !== "motion"
-          : ["pointer","windows","attention-on-the-dock"].indexOf(modelData.id)>=0
+          : modelData.rows.every(function(row) {return row.ui.surface === "classic"})
         property alias fields: fields
         width: stack.width
         height: cardBody.implicitHeight + Style.space(24)
